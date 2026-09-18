@@ -1,0 +1,650 @@
+---
+title: "Ayudantía 2 - Versión R"
+output: html_document
+---
+
+## Ayudantía 2
+
+### Profesor: Alex Digenova
+### Ayudante: Alan Molina
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(tidyverse)
+library(stringr)
+library(DataExplorer)
+library(GGally)
+library(magrittr)
+library(ggrepel)
+library(gridExtra)
+library(tidytext)
+```
+
+### Columnas del Dataset 
+- Sobrevivió: Resultado de la supervivencia (0 = No; 1 = Sí)
+- Clase: Clase socioeconómica (1 = Clase alta; 2 = Clase media; 3 = Clase baja)
+- Nombre: Nombre del pasajero
+- Sexo: Sexo del pasajero
+- Edad: Edad del pasajero (Algunas entradas contienen NaN)
+- SibSp: Número de hermanos y cónyuges del pasajero a bordo
+- Parch: Número de padres e hijos del pasajero a bordo
+- Billete: Número de billete del pasajero
+- Tarifa (fare): Tarifa pagada por el pasajero
+- Camarote: Número de camarote del pasajero (Algunas entradas contienen NaN)
+- Embarcado: Puerto de embarque del pasajero (C = Cherburgo; Q = Queenstown; S = Southampton)
+
+```{r}
+df <- read_csv("titanic/train.csv")
+df
+
+```
+
+```{r}
+head(df)
+```
+
+```{r}
+x <- sort(table(df$Pclass), decreasing = TRUE)
+x
+```
+```{r}
+sum(x)
+```
+
+## Estadística Descriptiva
+
+## **1. Medidas de Tendencia Central**
+Las medidas de tendencia central nos indican el **valor representativo** de un conjunto de datos.
+
+###  **Media (Promedio)**
+Es la suma de todos los valores dividida entre el número total de valores.
+
+$$
+\bar{x} = \frac{\sum x_i}{n}
+$$
+
+```{r}
+valor_promedio <- mean(df$Age, na.rm = TRUE)
+print(paste("Media:", valor_promedio))
+```
+
+### **Mediana** 
+
+Es el valor central cuando los datos están ordenados de menor a mayor. Si hay un número par de elementos, es el promedio de los dos valores centrales.
+
+```{r}
+mediana_valor <- median(df$Fare, na.rm = TRUE)
+print(paste("Mediana:", mediana_valor))
+```
+
+###  **Varianza ($\sigma^2$)**
+
+Es el promedio de las diferencias cuadradas entre cada valor y la media. Indica qué tan dispersos están los datos.
+
+Para una **población**:
+$$
+\sigma^2 = \frac{\sum (x_i - \bar{x})^2}{n}
+$$
+Para una **muestra**:
+$$
+s^2 = \frac{\sum (x_i - \bar{x})^2}{n-1}
+$$
+
+```{r}
+varianza_valor <- var(df$Age, na.rm = TRUE)
+print(paste("Varianza:", varianza_valor))
+```
+
+- La varianza mide qué tanto se alejan los valores de la edad respecto a la media.
+- Un valor de 211 indica que hay una amplia variabilidad en las edades de los pasajeros.
+
+### **Desviación Estándar ($\sigma$)**
+
+Es la raíz cuadrada de la varianza y mide la dispersión de los datos.
+
+$$
+\sigma = \sqrt{\sigma^2}
+$$
+
+```{r}
+std_dev <- sd(df$Age, na.rm = TRUE)
+print(paste("Desviación estándar:", std_dev))
+```
+
+- Esto significa que, en promedio, las edades de los pasajeros del Titanic varían ±14.52 años alrededor de la media.
+
+```{r}
+head(df, 10)
+```
+
+```{r}
+#Verificar tipo de variable en el dataset
+str(df)
+```
+
+```{r}
+cat("Resumen estadístico de las variables numéricas:\n")
+
+summary(select(df, where(is.numeric)))
+```
+```{r}
+# Histograma de edades con ajuste Gaussiano
+
+# Calcular media y desviación estándar de Age
+mu <- mean(df$Age, na.rm = TRUE)
+sigma <- sd(df$Age, na.rm = TRUE)
+
+ggplot(df, aes(x = Age)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 30,
+                 fill = "blue",
+                 alpha = 0.6,
+                 na.rm = TRUE) +
+  
+  # Curva normal ajustada
+  stat_function(fun = dnorm,
+                args = list(mean = mu, sd = sigma),
+                color = "red",
+                linewidth = 1.2) +
+  
+  labs(
+    title = "Distribución de Edad con Ajuste Gaussiano",
+    x = "Edad",
+    y = "Densidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Normal (Gaussiana)
+La **distribución normal** o **distribución de Gauss** es una de las más utilizadas en estadística y probabilidad. Se caracteriza por su forma de campana simétrica en torno a la media.
+
+### Propiedades:
+- Definida por dos parámetros: **media** (\(\mu\)) y **desviación estándar** (\(\sigma\)).
+- La función de densidad de probabilidad (PDF) es:
+  $$
+  f(x) = \frac{1}{\sigma \sqrt{2\pi}} e^{-\frac{(x - \mu)^2}{2\sigma^2}}
+  $$
+- Aproximación de muchos fenómenos naturales como la altura, peso y calificaciones.
+
+```{r}
+# Distribución Normal en R
+library(ggplot2)
+
+# Valores eje X
+x <- seq(-4, 4, length.out = 1000)
+
+# Densidad normal estándar N(0,1)
+y <- dnorm(x, mean = 0, sd = 1)
+
+# Crear data frame
+normal_df <- data.frame(x, y)
+
+# Graficar
+ggplot(normal_df, aes(x = x, y = y)) +
+  geom_line(color = "blue", linewidth = 1) +
+  labs(
+    title = "Distribución Normal",
+    x = "Valores",
+    y = "Densidad de Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Uniforme
+La **distribución uniforme** es aquella en la que todos los valores dentro de un intervalo tienen la misma probabilidad de ocurrir.
+
+### Propiedades:
+- Se define en un intervalo \([a, b]\) donde \(a\) y \(b\) son constantes.
+- Su función de densidad de probabilidad es:
+  $$
+  f(x) = \frac{1}{b-a}, \quad a \leq x \leq b
+  $$
+- Todos los valores dentro del rango son igualmente probables.
+
+```{r}
+# Distribución Uniforme en R
+library(ggplot2)
+
+# Valores eje X entre 0 y 1
+x <- seq(0, 1, length.out = 1000)
+
+# Densidad uniforme U(0,1)
+y <- dunif(x, min = 0, max = 1)
+
+# Crear data frame
+uniforme_df <- data.frame(x, y)
+
+# Graficar
+ggplot(uniforme_df, aes(x = x, y = y)) +
+  geom_line(color = "green", linewidth = 1) +
+  labs(
+    title = "Distribución Uniforme",
+    x = "Valores",
+    y = "Densidad de Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Exponencial
+La **distribución exponencial** modela el tiempo entre eventos en un proceso de Poisson, es decir, eventos que ocurren de manera continua e independiente.
+
+### Propiedades:
+- Se caracteriza por un único parámetro: **lambda** (\(\lambda\)).
+- Su función de densidad de probabilidad es:
+  $$
+  f(x) = \lambda e^{-\lambda x}, \quad x \geq 0
+  $$
+- Se usa en análisis de tiempos de espera, como la vida útil de productos.
+
+```{r}
+# Distribución Exponencial en R
+library(ggplot2)
+
+# Valores eje X entre 0 y 5
+x <- seq(0, 5, length.out = 1000)
+
+# Densidad exponencial con lambda = 1
+y <- dexp(x, rate = 1)
+
+# Crear data frame
+exponencial_df <- data.frame(x, y)
+
+# Graficar
+ggplot(exponencial_df, aes(x = x, y = y)) +
+  geom_line(color = "red", linewidth = 1) +
+  labs(
+    title = "Distribución Exponencial",
+    x = "Valores",
+    y = "Densidad de Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Binomial
+La **distribución binomial** modela el número de éxitos en \(n\) ensayos independientes de un experimento de Bernoulli con probabilidad \(p\).
+
+### Propiedades:
+- Se define por dos parámetros: **n** (número de ensayos) y **p** (probabilidad de éxito).
+- Su función de probabilidad es:
+  $$
+  P(X = k) = \binom{n}{k} p^k (1 - p)^{n-k}
+  $$
+- Se usa en situaciones como lanzar una moneda \(n\) veces y contar cuántas veces cae cara.
+
+```{r}
+# Distribución Binomial en R
+library(ggplot2)
+
+# Parámetros
+n <- 10
+p <- 0.5
+
+# Valores posibles de éxitos
+x <- 0:n
+
+# Probabilidades binomiales
+y <- dbinom(x, size = n, prob = p)
+
+# Crear data frame
+binomial_df <- data.frame(x, y)
+
+# Graficar
+ggplot(binomial_df, aes(x = x, y = y)) +
+  geom_segment(aes(xend = x, yend = 0), linewidth = 0.8, color = "blue") +
+  geom_point(size = 3, color = "blue") +
+  geom_hline(yintercept = 0, color = "red", linewidth = 0.8) +
+  labs(
+    title = "Distribución Binomial",
+    x = "Número de Éxitos",
+    y = "Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución de Poisson
+La **distribución de Poisson** modela el número de eventos que ocurren en un intervalo de tiempo fijo o espacio dado, cuando los eventos ocurren con una tasa promedio constante.
+
+### Propiedades:
+- Se define por el parámetro \(\lambda\) (tasa promedio de ocurrencia).
+- Su función de probabilidad es:
+  $$
+  P(X = k) = \frac{\lambda^k e^{-\lambda}}{k!}, \quad k = 0, 1, 2, \dots
+  $$
+- Se usa en aplicaciones como el número de llamadas a un call center por minuto.
+
+```{r chunk17}
+# Distribución de Poisson en R
+library(ggplot2)
+
+# Parámetro lambda
+lambda_poisson <- 3
+
+# Valores posibles de eventos
+x <- 0:14
+
+# Probabilidades Poisson
+y <- dpois(x, lambda = lambda_poisson)
+
+# Crear data frame
+poisson_df <- data.frame(x, y)
+
+# Graficar
+ggplot(poisson_df, aes(x = x, y = y)) +
+  geom_segment(aes(xend = x, yend = 0), linewidth = 0.8, color = "darkgreen") +
+  geom_point(size = 3, color = "darkgreen") +
+  geom_hline(yintercept = 0, color = "red", linewidth = 0.8) +
+  labs(
+    title = "Distribución de Poisson",
+    x = "Número de Eventos",
+    y = "Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Gamma
+La **distribución Gamma** es una generalización de la distribución exponencial y se usa para modelar tiempos de espera hasta que ocurren varios eventos.
+
+### Propiedades:
+- Se define por dos parámetros: **forma** (\(k\)) y **escala** (\(\theta\)).
+- Su función de densidad de probabilidad es:
+  $$
+  f(x) = \frac{x^{k-1} e^{-x/\theta}}{\theta^k \Gamma(k)}, \quad x > 0
+  $$
+- Se usa en tiempos de vida de sistemas, como la duración de baterías.
+
+```{r}
+# Distribución Gamma en R
+library(ggplot2)
+
+# Valores eje X entre 0 y 10
+x <- seq(0, 10, length.out = 1000)
+
+# Parámetros: shape = 2, scale = 1
+y <- dgamma(x, shape = 2, scale = 1)
+
+# Crear data frame
+gamma_df <- data.frame(x, y)
+
+# Graficar
+ggplot(gamma_df, aes(x = x, y = y)) +
+  geom_line(color = "magenta", linewidth = 1) +
+  labs(
+    title = "Distribución Gamma",
+    x = "Valores",
+    y = "Densidad de Probabilidad"
+  ) +
+  theme_minimal()
+```
+
+# **Ejercicio de Probabilidad Condicional con el Titanic**
+
+## **Introducción**
+La probabilidad condicional nos permite responder preguntas del tipo **P(A | B)**, es decir, la probabilidad de que ocurra el evento **A** dado que sabemos que ha ocurrido el evento **B**.  
+
+En este ejercicio, analizaremos datos reales del famoso naufragio del **Titanic** para responder preguntas como:  
+
+- ¿Cuál es la probabilidad de que una persona haya sobrevivido, dado que era mujer?  
+- ¿Es más probable que haya sobrevivido un niño o un adulto?  
+- ¿Cuál es la probabilidad de que una persona haya sido de primera clase, dado que sobrevivió?
+
+```{r}
+# Cantidad total de pasajeros
+total_pasajeros <- nrow(df)
+
+# Cantidad de pasajeros que sobrevivieron
+total_sobrevivientes <- sum(df$Survived, na.rm = TRUE)
+
+# Cantidad de mujeres que sobrevivieron
+mujeres_sobrevivientes <- nrow(
+  subset(df, Sex == "female" & Survived == 1)
+)
+
+# Cantidad de hombres que sobrevivieron
+hombres_sobrevivientes <- nrow(
+  subset(df, Sex == "male" & Survived == 1)
+)
+
+# Calcular probabilidades condicionales
+p_mujer_dado_sobrevivio <- mujeres_sobrevivientes / total_sobrevivientes
+p_hombre_dado_sobrevivio <- hombres_sobrevivientes / total_sobrevivientes
+
+# Imprimir resultados
+cat("Total de pasajeros:", total_pasajeros, "\n")
+cat("Total de sobrevivientes:", total_sobrevivientes, "\n")
+cat("Mujeres que sobrevivieron:", mujeres_sobrevivientes, "\n")
+cat("Hombres que sobrevivieron:", hombres_sobrevivientes, "\n")
+cat("P(Mujer | Sobrevivió):", round(p_mujer_dado_sobrevivio, 4), "\n")
+cat("P(Hombre | Sobrevivió):", round(p_hombre_dado_sobrevivio, 4), "\n")
+```
+
+```{r}
+# Probabilidad condicional P(sobrevive | niño) y P(sobrevive | adulto)
+
+p_sobrevive_nino <- mean(df$Survived[df$Age < 18], na.rm = TRUE)
+
+p_sobrevive_adulto <- mean(df$Survived[df$Age >= 18], na.rm = TRUE)
+
+# Mostrar resultados
+cat("P(Sobrevive | Niño):", round(p_sobrevive_nino, 4), "\n")
+cat("P(Sobrevive | Adulto):", round(p_sobrevive_adulto, 4), "\n")
+```
+
+```{r}
+# Correlación de Pearson entre edad y tarifa pagada
+
+# Seleccionar columnas y eliminar valores nulos
+df_clean <- na.omit(df[, c("Age", "Fare")])
+
+# Correlación de Pearson
+corr <- cor.test(df_clean$Age, df_clean$Fare, method = "pearson")
+
+# Mostrar resultados
+cat("Coeficiente de correlación:", round(corr$estimate, 4), "\n")
+cat("Valor p:", corr$p.value, "\n")
+```
+
+
+```{r}
+# Matriz de correlación entre Edad y Tarifa
+
+# Seleccionar columnas y eliminar NA
+df_clean <- na.omit(df[, c("Age", "Fare")])
+
+# Matriz de correlación
+matriz_corr <- cor(df_clean)
+
+# Convertir a formato largo para ggplot
+corr_df <- as.data.frame(as.table(matriz_corr))
+
+# Heatmap
+ggplot(corr_df, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                       midpoint = 0.5, limit = c(0,1)) +
+  labs(
+    title = "Matriz de Correlación entre Edad y Tarifa",
+    x = "",
+    y = "",
+    fill = "Correlación"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+# Seleccionar solo columnas numéricas
+library(dplyr)
+library(ggplot2)
+
+df_numericas <- df %>%
+  select(where(is.numeric))
+
+# Calcular matriz de correlación
+correlation_matrix <- cor(df_numericas, use = "complete.obs")
+
+# Convertir a formato largo
+corr_df <- as.data.frame(as.table(correlation_matrix))
+
+# Visualizar heatmap
+ggplot(corr_df, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", Freq)), size = 4) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0
+  ) +
+  labs(
+    title = "Matriz de Correlación",
+    x = "",
+    y = "",
+    fill = "Correlación"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+
+```
+
+## Tarea Ayudantía:
+
+1. Implemente funciones propias para calcular el promedio, la mediana, el mínimo, el máximo y varianza de cada uno de los atributos del conjunto de datos titanic calculados anteriormente, luego compare con los resultados vistos anteriormente.
+
+- ¿Los valores obtenidos con las funciones propias coinciden con los de Pandas? ¿Por qué sí o por qué no?
+
+- ¿Hay diferencias entre la varianza calculada manualmente y la de Pandas? ¿Por qué?
+
+- **¿Por qué es importante calcular estas métricas en el análisis de datos?**
+
+- ¿Qué información relevante se puede extraer sobre los pasajeros del Titanic a partir de estos cálculos?
+
+```{r}
+
+```
+
+2. Observe la matriz de correlacion de clase 1, clase 2 y clase 3 del conjunto de datos y responda que par de atributos estan mayormente correlacionados de forma positiva y que par de atributos estan mayormente correlacionados de forma negativa. Reflexione porque podría suceder esto.
+
+```{r}
+# Mostrar cada matriz por separado (una debajo de otra)
+
+# Variables numéricas relevantes
+df_numeric <- df %>%
+  select(Pclass, Age, Fare, SibSp, Parch, Survived) %>%
+  na.omit()
+
+# Iterar por cada clase
+for (clase in sort(unique(df_numeric$Pclass))) {
+  
+  df_subset <- df_numeric %>%
+    filter(Pclass == clase)
+  
+  # Matriz correlación
+  corr_matrix <- cor(df_subset)
+  
+  # Formato largo
+  corr_df <- as.data.frame(as.table(corr_matrix))
+  
+  # Gráfico individual
+  p <- ggplot(corr_df, aes(x = Var1, y = Var2, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = sprintf("%.2f", Freq)), size = 4) +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      midpoint = 0,
+      limits = c(-1,1)
+    ) +
+    labs(
+      title = paste("Matriz de Correlación - Clase", clase),
+      x = "",
+      y = "",
+      fill = "Corr"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(face = "bold", hjust = 0.5)
+    )
+  
+  print(p)
+}
+```
+
+
+
+############################################################
+# TAREA AYUDANTÍA TITANIC
+############################################################
+
+
+Tarea Ayudantía:
+
+1. Implemente funciones propias para calcular el promedio,
+la mediana, el mínimo, el máximo y la varianza de cada uno
+de los atributos del conjunto de datos Titanic calculados
+anteriormente. Luego compare con los resultados obtenidos
+con las funciones incorporadas de R.
+
+Preguntas:
+• ¿Los valores obtenidos con las funciones propias coinciden
+  con los resultados de R? ¿Por qué sí o por qué no?
+
+
+
+• ¿Hay diferencias entre la varianza calculada manualmente
+  y la entregada por R? ¿Por qué?
+
+
+
+• ¿Por qué es importante calcular estas métricas en el
+  análisis de datos?
+
+
+
+• ¿Qué información relevante se puede extraer sobre los
+  pasajeros del Titanic a partir de estos cálculos?
+
+
+
+
+2. Observe la matriz de correlación de Clase 1, Clase 2 y
+Clase 3 del conjunto de datos y responda:
+
+• ¿Qué par de atributos está mayormente correlacionado
+  de forma positiva?
+
+
+
+• ¿Qué par de atributos está mayormente correlacionado
+  de forma negativa?
+
+
+
+• Reflexione por qué podría suceder esto.
+
+
+
+
+3. Realice un gráfico de dispersión para el par de atributos
+correlacionados positivamente y otro gráfico de dispersión
+para el par correlacionado negativamente.
+
+Luego explique:
+
+• ¿Cuáles son las diferencias entre ambos gráficos?
+
+
+
+
+• ¿A qué se deben esas diferencias?
+
+
+
