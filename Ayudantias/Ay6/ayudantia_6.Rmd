@@ -1,0 +1,884 @@
+---
+title: "Ayudantía 6: Árboles de Decisión y Comparación de Clasificadores"
+author: "Alan Molina"
+date: "`r format(Sys.Date(), '%d-%m-%Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 9,
+  fig.height = 6
+)
+
+set.seed(333)
+
+paquetes <- c(
+  "tidyverse",
+  "caret",
+  "rpart",
+  "rpart.plot",
+  "patchwork",
+  "scales"
+)
+
+faltantes <- paquetes[!vapply(paquetes, requireNamespace, logical(1), quietly = TRUE)]
+
+if (length(faltantes) > 0) {
+  stop(
+    paste0(
+      "Faltan paquetes requeridos: ",
+      paste(faltantes, collapse = ", "),
+      ". Instálelos con install.packages(c(",
+      paste(sprintf('\"%s\"', faltantes), collapse = ", "),
+      "))."
+    )
+  )
+}
+
+library(tidyverse)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(patchwork)
+library(scales)
+```
+
+# Árboles de Decisión: clasificador al detalle
+
+## ¿Qué es un árbol de decisión?
+
+> **Preguntas pedagógicas iniciales**
+>
+> 1. Si tuvieras que clasificar un diamante como caro o barato sin usar código, ¿qué preguntas harías primero?
+> 2. ¿Por qué un árbol de decisión se parece a una pauta de diagnóstico?
+> 3. ¿Qué diferencia hay entre una decisión tomada por una sola regla y una decisión tomada por varias reglas encadenadas?
+
+Un árbol de decisión es un modelo de clasificación o regresión que toma decisiones mediante una estructura jerárquica. Cada nodo representa una pregunta sobre una variable, cada rama representa una posible respuesta y cada hoja representa una predicción final.
+
+La idea central es dividir progresivamente el espacio de los datos en regiones cada vez más homogéneas respecto a la variable objetivo. Es similar a un proceso de diagnóstico: primero se formula la pregunta más informativa, luego se divide el conjunto de casos y, después, se repite el procedimiento con preguntas más específicas.
+
+## ¿Cómo funciona?
+
+1. El algoritmo parte del conjunto completo de entrenamiento.
+2. Busca la variable que mejor separa las clases.
+3. Divide los datos según la condición seleccionada.
+4. Repite el proceso de forma recursiva en cada subconjunto.
+5. Termina cuando los nodos son suficientemente puros, se alcanza una profundidad máxima o quedan muy pocos datos para seguir dividiendo.
+
+## Criterios comunes para dividir nodos
+
+> **Preguntas de comprensión**
+>
+> 1. ¿Qué significa que un nodo sea “puro”?
+> 2. Si un nodo contiene mitad de casos `Alto` y mitad de casos `Bajo`, ¿esperarías una entropía alta o baja?
+> 3. ¿Por qué no basta con dividir muchas veces los datos hasta memorizar todos los ejemplos?
+
+### Entropía
+
+\[
+H(D) = - \sum_{i=1}^{k} p_i \log_2(p_i)
+\]
+
+La entropía mide la incertidumbre del conjunto. Cuando las clases están muy mezcladas, la entropía es alta. Cuando casi todos los casos pertenecen a una sola clase, la entropía es baja.
+
+### Ganancia de información
+
+\[
+Gain(A) = H(D) - \sum_{v \in valores(A)} \frac{|D_v|}{|D|} H(D_v)
+\]
+
+La ganancia de información cuantifica cuánto disminuye la incertidumbre después de dividir el conjunto usando una variable determinada.
+
+### Impureza de Gini
+
+\[
+Gini(D) = 1 - \sum_{i=1}^{k} p_i^2
+\]
+
+La impureza de Gini mide la mezcla de clases dentro de un nodo. Un valor cercano a 0 indica un nodo más puro. En la práctica, muchos árboles de clasificación usan Gini porque es simple y computacionalmente eficiente.
+
+## Ventajas
+
+- Son fáciles de interpretar y visualizar.
+- No requieren escalar las variables.
+- Permiten trabajar con variables numéricas y categóricas.
+- Capturan relaciones no lineales.
+- Son útiles para explicar reglas de decisión.
+
+## Desventajas
+
+- Pueden sobreajustar si crecen demasiado.
+- Son sensibles a pequeñas variaciones en los datos.
+- Árboles muy profundos pueden ser difíciles de interpretar.
+- Una sola partición temprana puede condicionar fuertemente el resto del árbol.
+
+# Clasificación del precio de diamantes con árbol de decisión
+
+En esta sección se usa el dataset `diamonds`, disponible en `ggplot2`. El objetivo es construir una variable binaria llamada `high_price`, donde un diamante se clasifica como `Alto` si su precio es mayor que la mediana del precio y como `Bajo` en caso contrario.
+
+
+> **Antes de ejecutar**
+>
+> 1. ¿Cuál será la variable objetivo del problema?
+> 2. ¿Por qué se usa la mediana del precio para construir `high_price`?
+> 3. ¿Qué variables parecen más razonables para explicar si un diamante tendrá precio alto?
+
+```{r cargar-diamonds}
+diamonds_df <- ggplot2::diamonds %>%
+  select(cut, color, clarity, carat, depth, table, price) %>%
+  drop_na() %>%
+  mutate(
+    high_price = if_else(price > median(price), "Alto", "Bajo"),
+    high_price = factor(high_price, levels = c("Bajo", "Alto"))
+  )
+
+glimpse(diamonds_df)
+```
+
+## Distribución de la variable objetivo
+
+> **Pregunta guía**
+>
+> Antes de mirar el gráfico, ¿esperarías que las clases `Alto` y `Bajo` queden balanceadas? Justifica tu respuesta considerando que se usa la mediana del precio.
+
+```{r distribucion-precio}
+diamonds_df %>%
+  count(high_price) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = high_price, y = n, fill = high_price)) +
+  geom_col(width = 0.65, show.legend = FALSE) +
+  geom_text(aes(label = paste0(n, " (", percent(prop, accuracy = 0.1), ")")),
+            vjust = -0.4) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Distribución de clases según precio",
+    x = "Clase de precio",
+    y = "Cantidad de diamantes"
+  ) +
+  theme_minimal()
+```
+
+## Separación entre entrenamiento y validación
+
+> **Preguntas de control**
+>
+> 1. ¿Por qué no se evalúa el modelo con los mismos datos usados para entrenarlo?
+> 2. ¿Qué representa el 70% de entrenamiento y el 30% de validación?
+> 3. ¿Qué problema podría aparecer si una clase queda casi ausente en el conjunto de validación?
+
+```{r particion-diamonds}
+set.seed(42)
+
+idx_train <- createDataPartition(
+  diamonds_df$high_price,
+  p = 0.70,
+  list = FALSE
+)
+
+train_diamonds <- diamonds_df[idx_train, ]
+val_diamonds   <- diamonds_df[-idx_train, ]
+
+nrow(train_diamonds)
+nrow(val_diamonds)
+```
+
+## Entrenamiento del árbol de decisión
+
+> **Antes de entrenar**
+>
+> 1. ¿Qué variable crees que aparecerá cerca de la raíz del árbol?
+> 2. ¿Qué efecto tendría aumentar `maxdepth`?
+> 3. ¿Qué riesgo aparece si el árbol se deja crecer sin restricciones?
+
+```{r modelo-arbol}
+modelo_arbol <- rpart(
+  high_price ~ cut + color + clarity + carat + depth + table,
+  data = train_diamonds,
+  method = "class",
+  parms = list(split = "gini"),
+  control = rpart.control(
+    maxdepth = 4,
+    cp = 0.001
+  )
+)
+
+modelo_arbol
+```
+
+## Evaluación del árbol
+
+> **Preguntas para interpretar resultados**
+>
+> 1. ¿Qué significa un falso positivo en este problema?
+> 2. ¿Qué significa un falso negativo?
+> 3. Si el modelo predice muchos diamantes como `Alto`, ¿qué métrica podría verse afectada?
+
+```{r evaluacion-arbol}
+pred_arbol <- predict(modelo_arbol, newdata = val_diamonds, type = "class")
+
+cm_arbol <- confusionMatrix(
+  data = pred_arbol,
+  reference = val_diamonds$high_price,
+  positive = "Alto"
+)
+
+cm_arbol
+```
+
+## Visualización del árbol
+
+> **Actividad de lectura del árbol**
+>
+> Escoge una hoja del árbol y reconstruye el camino desde la raíz hasta esa hoja. Luego responde: ¿qué condiciones se cumplieron y qué clase final predice esa hoja?
+
+```{r visualizacion-arbol, fig.width=14, fig.height=7}
+rpart.plot(
+  modelo_arbol,
+  type = 2,
+  extra = 104,
+  fallen.leaves = TRUE,
+  box.palette = "Blues",
+  shadow.col = "gray",
+  main = "Árbol de decisión para clasificar precio de diamantes"
+)
+```
+
+## Importancia de variables
+
+> **Preguntas de análisis**
+>
+> 1. ¿La variable más importante coincide con tu intuición inicial?
+> 2. ¿Una variable con baja importancia debe eliminarse automáticamente?
+> 3. ¿La importancia de una variable implica causalidad o sólo utilidad predictiva?
+
+```{r importancia-variables}
+importancia_arbol <- modelo_arbol$variable.importance %>%
+  enframe(name = "variable", value = "importancia") %>%
+  arrange(desc(importancia))
+
+importancia_arbol %>%
+  ggplot(aes(x = reorder(variable, importancia), y = importancia)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Importancia de variables en el árbol de decisión",
+    x = "Variable",
+    y = "Importancia"
+  ) +
+  theme_minimal()
+```
+
+# ¿Cómo interpretar un árbol de decisión?
+
+> **Pregunta de síntesis**
+>
+> Si el árbol fuera una entrevista estructurada, ¿qué representaría cada nodo, cada rama y cada hoja?
+
+Cuando se visualiza un árbol, cada nodo suele entregar información como la condición de división, la impureza del nodo, la cantidad de observaciones y la clase predicha.
+
+Por ejemplo, una regla como `carat < 0.695` indica que el árbol está usando el peso del diamante para dividir los datos. Si la condición se cumple, el caso avanza por una rama; si no se cumple, avanza por la otra.
+
+La impureza de Gini indica qué tan mezcladas están las clases en ese nodo. Un valor alto implica que hay mezcla entre diamantes de precio alto y bajo. Un valor cercano a cero indica que el nodo contiene principalmente casos de una sola clase.
+
+La lectura del árbol es secuencial: se comienza en la raíz, se responde cada condición y se avanza por las ramas hasta llegar a una hoja. Esa hoja contiene la predicción final. En términos intuitivos, el árbol funciona como una pauta de decisión: primero pregunta lo más importante y luego formula preguntas más específicas.
+
+# Comparación de clasificadores
+
+En esta parte se analiza un dataset bidimensional llamado `coordinates1.txt`. El archivo original esperado tiene tres columnas separadas por coma:
+
+- `x1`: primera coordenada.
+- `x2`: segunda coordenada.
+- `clase`: etiqueta de clase, donde se asume `0` para rojo y `1` para azul.
+
+El notebook original depende del archivo externo `coordinates1.txt`. Para que este R Markdown pueda ejecutarse incluso si el archivo no está en el directorio de trabajo, se incluye una alternativa: si el archivo existe, se usa el archivo real; si no existe, se genera un dataset sintético con la misma estructura. Si se desea trabajar estrictamente con el archivo original, basta con poner `coordinates1.txt` en la misma carpeta del `.Rmd`.
+
+> **Antes de cargar los datos**
+>
+> 1. ¿Qué representa cada punto en el plano?
+> 2. ¿Qué significa que la clase sea `Rojo` o `Azul`?
+> 3. Si sólo tuvieras las coordenadas `x1` y `x2`, ¿cómo intentarías separar manualmente las clases?
+
+```{r cargar-coordinates}
+ruta_coordinates <- "coordinates1.txt"
+
+if (file.exists(ruta_coordinates)) {
+  dataset1 <- read_csv(
+    ruta_coordinates,
+    col_names = c("x1", "x2", "clase"),
+    show_col_types = FALSE
+  )
+} else {
+  set.seed(333)
+  n <- 140
+
+  dataset1 <- tibble(
+    x1 = runif(n, min = 15, max = 90),
+    x2 = runif(n, min = 15, max = 65)
+  ) %>%
+    mutate(
+      clase_num = if_else(
+        x2 > (-0.8 * x1 + 81) + rnorm(n(), mean = 0, sd = 7),
+        1,
+        0
+      ),
+      clase = clase_num
+    ) %>%
+    select(x1, x2, clase)
+}
+
+dataset1 <- dataset1 %>%
+  mutate(
+    clase = factor(
+      clase,
+      levels = c(0, 1),
+      labels = c("Rojo", "Azul")
+    )
+  )
+
+glimpse(dataset1)
+```
+
+## Exploración inicial
+
+> **Pregunta de observación**
+>
+> Sin usar los colores de clase, ¿parece posible separar los puntos con una recta horizontal? ¿Por qué?
+
+```{r grafico-coordinates-sin-clase}
+ggplot(dataset1, aes(x = x1, y = x2)) +
+  geom_point(alpha = 0.8) +
+  geom_segment(
+    aes(x = 20, y = 40, xend = 90, yend = 40),
+    linetype = "dashed",
+    inherit.aes = FALSE
+  ) +
+  labs(
+    title = "Distribución inicial de puntos",
+    x = expression(x[1]),
+    y = expression(x[2])
+  ) +
+  theme_minimal()
+```
+
+## Exploración por clase
+
+> **Preguntas de interpretación visual**
+>
+> 1. ¿Las clases parecen mezcladas o separadas?
+> 2. ¿Una frontera horizontal sería suficiente?
+> 3. ¿Una frontera inclinada parece más adecuada? Justifica usando la distribución de puntos.
+
+```{r grafico-coordinates-clase}
+conteo_clases <- dataset1 %>%
+  count(clase)
+
+conteo_clases
+
+ggplot(dataset1, aes(x = x1, y = x2, color = clase)) +
+  geom_point(size = 2.3, alpha = 0.85) +
+  geom_segment(
+    aes(x = 20, y = 40, xend = 90, yend = 40),
+    linetype = "dashed",
+    inherit.aes = FALSE
+  ) +
+  labs(
+    title = "Puntos 2D coloreados por clase",
+    x = expression(x[1]),
+    y = expression(x[2]),
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+# Clasificador manual por altura
+
+> **Antes de aplicar la regla**
+>
+> 1. ¿Qué ventaja tiene una regla tan simple como `x2 > 40`?
+> 2. ¿Qué tipo de errores esperas observar si las clases no están perfectamente separadas por altura?
+> 3. ¿Qué información ignora este clasificador?
+
+El primer clasificador usa una regla directa: si `x2 > 40`, clasifica el punto como azul; si no, lo clasifica como rojo.
+
+Esta regla equivale a trazar una frontera horizontal en `x2 = 40`. La analogía adecuada es la de una línea divisoria en un mapa: todo lo que queda por encima pertenece a una región y todo lo que queda por debajo pertenece a otra.
+
+```{r muestra-aleatoria-altura}
+set.seed(333)
+
+muestra_aleatoria <- tibble(
+  x1 = sample(15:89, size = 6, replace = TRUE),
+  x2 = sample(15:59, size = 6, replace = TRUE)
+)
+
+muestra_aleatoria
+```
+
+```{r clasificador-altura}
+clasificador_altura <- function(x2) {
+  if_else(x2 > 40, "Azul", "Rojo")
+}
+
+muestra_altura <- muestra_aleatoria %>%
+  mutate(
+    clase_predicha = factor(
+      clasificador_altura(x2),
+      levels = c("Rojo", "Azul")
+    )
+  )
+
+muestra_altura %>%
+  count(clase_predicha, name = "n")
+```
+
+```{r grafico-clasificador-altura}
+ggplot() +
+  geom_point(
+    data = dataset1,
+    aes(x = x1, y = x2, color = clase),
+    alpha = 0.45,
+    size = 2
+  ) +
+  geom_point(
+    data = muestra_altura,
+    aes(x = x1, y = x2, color = clase_predicha),
+    size = 5,
+    shape = 17
+  ) +
+  geom_segment(
+    aes(x = 20, y = 40, xend = 90, yend = 40),
+    linetype = "dashed",
+    inherit.aes = FALSE
+  ) +
+  labs(
+    title = "Clasificación manual por altura: frontera x2 = 40",
+    x = expression(x[1]),
+    y = expression(x[2]),
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+# Clasificador manual con función afín
+
+> **Preguntas previas**
+>
+> 1. ¿Por qué una recta inclinada puede separar mejor los datos que una recta horizontal?
+> 2. ¿Qué representa la pendiente de la recta en la frontera de decisión?
+> 3. ¿Qué ocurre con la clasificación si un punto cae exactamente sobre la recta?
+
+El segundo clasificador usa una recta inclinada como frontera de decisión. La recta se define a partir de los puntos `(20, 65)` y `(70, 25)`.
+
+```{r recta-afin}
+posx <- c(20, 70)
+posy <- c(65, 25)
+
+m <- (posy[1] - posy[2]) / (posx[1] - posx[2])
+c <- posy[1] - posx[1] * m
+
+m
+c
+```
+
+La frontera obtenida es:
+
+\[
+x_2 = -0.8x_1 + 81
+\]
+
+La regla de clasificación queda definida así:
+
+- Si \(x_2 < -0.8x_1 + 81\), el punto se clasifica como `Rojo`.
+- Si \(x_2 \geq -0.8x_1 + 81\), el punto se clasifica como `Azul`.
+
+```{r clasificador-afin}
+set.seed(333)
+
+muestra_aleatoria_2 <- tibble(
+  x1 = sample(15:89, size = 6, replace = TRUE),
+  x2 = sample(15:59, size = 6, replace = TRUE)
+)
+
+clasificador_afin <- function(x1, x2) {
+  if_else((-0.8 * x1 + 81) > x2, "Rojo", "Azul")
+}
+
+muestra_afin <- muestra_aleatoria_2 %>%
+  mutate(
+    clase_predicha = factor(
+      clasificador_afin(x1, x2),
+      levels = c("Rojo", "Azul")
+    )
+  )
+
+muestra_afin
+```
+
+```{r grafico-clasificador-afin}
+ggplot() +
+  geom_point(
+    data = dataset1,
+    aes(x = x1, y = x2, color = clase),
+    alpha = 0.45,
+    size = 2
+  ) +
+  geom_point(
+    data = muestra_afin,
+    aes(x = x1, y = x2, color = clase_predicha),
+    size = 5,
+    shape = 17
+  ) +
+  geom_abline(
+    intercept = 81,
+    slope = -0.8,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Clasificación manual con función afín",
+    subtitle = "Frontera de decisión: x2 = -0.8x1 + 81",
+    x = expression(x[1]),
+    y = expression(x[2]),
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+# Clasificador KNN
+
+> **Preguntas conceptuales**
+>
+> 1. ¿Por qué KNN necesita comparar distancias?
+> 2. ¿Qué pasaría si `x1` tuviera valores entre 0 y 10.000, pero `x2` entre 0 y 1?
+> 3. ¿Qué efecto esperas al usar un `k` muy pequeño frente a un `k` muy grande?
+
+El clasificador KNN asigna una clase observando los vecinos más cercanos de cada punto. Si `k = 5`, el nuevo punto se clasifica según la clase mayoritaria entre sus cinco vecinos más próximos.
+
+KNN es sensible a la escala de las variables. Por esa razón, antes de entrenarlo se estandarizan `x1` y `x2`.
+
+```{r particion-coordinates}
+set.seed(1)
+
+idx_train_2d <- createDataPartition(
+  dataset1$clase,
+  p = 0.70,
+  list = FALSE
+)
+
+train_2d <- dataset1[idx_train_2d, ]
+test_2d  <- dataset1[-idx_train_2d, ]
+
+preproc_2d <- preProcess(
+  train_2d %>% select(x1, x2),
+  method = c("center", "scale")
+)
+
+train_2d_scaled <- predict(preproc_2d, train_2d %>% select(x1, x2)) %>%
+  as_tibble() %>%
+  mutate(clase = train_2d$clase)
+
+test_2d_scaled <- predict(preproc_2d, test_2d %>% select(x1, x2)) %>%
+  as_tibble() %>%
+  mutate(clase = test_2d$clase)
+
+glimpse(train_2d_scaled)
+```
+
+```{r modelo-knn}
+modelo_knn <- knn3(
+  clase ~ x1 + x2,
+  data = train_2d_scaled,
+  k = 5
+)
+
+pred_knn <- predict(
+  modelo_knn,
+  newdata = test_2d_scaled %>% select(x1, x2),
+  type = "class"
+)
+
+cm_knn <- confusionMatrix(
+  data = pred_knn,
+  reference = test_2d_scaled$clase,
+  positive = "Azul"
+)
+
+cm_knn
+```
+
+# Regresión logística
+
+> **Preguntas conceptuales**
+>
+> 1. ¿Por qué la regresión logística entrega probabilidades antes de entregar clases?
+> 2. ¿Qué significa usar un umbral de 0.5?
+> 3. ¿Qué limitación tiene una frontera lineal cuando las clases siguen una forma curva o irregular?
+
+La regresión logística estima la probabilidad de pertenecer a una clase. En este caso, se usa para predecir si un punto pertenece a la clase `Azul` o `Rojo`.
+
+A diferencia de KNN, la regresión logística genera una frontera lineal. Por eso, cuando la separación real entre clases es aproximadamente recta, suele funcionar bien; si la frontera real es irregular o curva, KNN puede adaptarse mejor.
+
+```{r modelo-logistico}
+modelo_logistico <- glm(
+  clase ~ x1 + x2,
+  data = train_2d_scaled,
+  family = binomial
+)
+
+prob_logistico <- predict(
+  modelo_logistico,
+  newdata = test_2d_scaled %>% select(x1, x2),
+  type = "response"
+)
+
+pred_logistico <- factor(
+  if_else(prob_logistico >= 0.5, "Azul", "Rojo"),
+  levels = c("Rojo", "Azul")
+)
+
+cm_logistico <- confusionMatrix(
+  data = pred_logistico,
+  reference = test_2d_scaled$clase,
+  positive = "Azul"
+)
+
+cm_logistico
+```
+
+# Fronteras de decisión
+
+> **Preguntas de comparación visual**
+>
+> 1. ¿Cuál frontera parece más flexible?
+> 2. ¿Cuál frontera parece más simple e interpretable?
+> 3. ¿Una frontera más compleja siempre implica un mejor modelo?
+
+La frontera de decisión muestra qué región del plano sería clasificada como cada clase. Esta visualización permite comparar la forma de decisión de los modelos:
+
+- KNN puede producir fronteras más flexibles y locales.
+- La regresión logística produce una frontera lineal.
+- El clasificador manual produce una regla explícita definida por una recta.
+
+```{r funcion-frontera}
+graficar_frontera <- function(modelo, tipo_modelo, datos, titulo) {
+  grid <- expand_grid(
+    x1 = seq(min(datos$x1) - 1, max(datos$x1) + 1, length.out = 250),
+    x2 = seq(min(datos$x2) - 1, max(datos$x2) + 1, length.out = 250)
+  )
+
+  if (tipo_modelo == "knn") {
+    grid <- grid %>%
+      mutate(
+        clase_predicha = predict(
+          modelo,
+          newdata = grid,
+          type = "class"
+        )
+      )
+  }
+
+  if (tipo_modelo == "logistico") {
+    grid <- grid %>%
+      mutate(
+        prob = predict(
+          modelo,
+          newdata = grid,
+          type = "response"
+        ),
+        clase_predicha = factor(
+          if_else(prob >= 0.5, "Azul", "Rojo"),
+          levels = c("Rojo", "Azul")
+        )
+      )
+  }
+
+  ggplot() +
+    geom_raster(
+      data = grid,
+      aes(x = x1, y = x2, fill = clase_predicha),
+      alpha = 0.35
+    ) +
+    geom_point(
+      data = datos,
+      aes(x = x1, y = x2, color = clase),
+      size = 2.2,
+      alpha = 0.9
+    ) +
+    labs(
+      title = titulo,
+      x = expression(x[1]~"(escalado)"),
+      y = expression(x[2]~"(escalado)"),
+      fill = "Región",
+      color = "Clase real"
+    ) +
+    theme_minimal()
+}
+```
+
+```{r graficos-frontera, fig.width=13, fig.height=5.5}
+p_knn <- graficar_frontera(
+  modelo = modelo_knn,
+  tipo_modelo = "knn",
+  datos = test_2d_scaled,
+  titulo = "Frontera de decisión - KNN (k = 5)"
+)
+
+p_logistico <- graficar_frontera(
+  modelo = modelo_logistico,
+  tipo_modelo = "logistico",
+  datos = test_2d_scaled,
+  titulo = "Frontera de decisión - Regresión logística"
+)
+
+p_knn + p_logistico
+```
+
+# Comparación de métricas
+
+> **Preguntas para discusión**
+>
+> 1. ¿Qué modelo obtiene mayor Accuracy?
+> 2. ¿El modelo con mayor Accuracy también tiene mejor Precision, Recall y F1-score?
+> 3. Si la clase `Azul` fuera la más importante, ¿qué métrica priorizarías?
+
+```{r metricas-modelos}
+extraer_metricas <- function(cm, nombre_modelo) {
+  tibble(
+    Modelo = nombre_modelo,
+    Accuracy = unname(cm$overall["Accuracy"]),
+    Precision = unname(cm$byClass["Precision"]),
+    Recall = unname(cm$byClass["Recall"]),
+    `F1-score` = unname(cm$byClass["F1"])
+  )
+}
+
+metricas_modelos <- bind_rows(
+  extraer_metricas(cm_knn, "KNN"),
+  extraer_metricas(cm_logistico, "Regresión logística")
+)
+
+metricas_modelos
+```
+
+```{r grafico-metricas}
+metricas_modelos %>%
+  pivot_longer(
+    cols = -Modelo,
+    names_to = "Metrica",
+    values_to = "Valor"
+  ) %>%
+  ggplot(aes(x = Modelo, y = Valor, fill = Metrica)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  geom_text(
+    aes(label = round(Valor, 3)),
+    position = position_dodge(width = 0.75),
+    vjust = -0.4,
+    size = 3.5
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Comparación de métricas: KNN vs Regresión logística",
+    x = "Modelo",
+    y = "Valor",
+    fill = "Métrica"
+  ) +
+  theme_minimal()
+```
+
+# Clasificación de nuevos puntos con KNN
+
+> **Antes de predecir**
+>
+> 1. ¿Por qué los nuevos puntos deben escalarse con el mismo preprocesamiento usado en entrenamiento?
+> 2. ¿Qué podría ocurrir si se escalara nuevamente usando sólo los tres puntos nuevos?
+> 3. Para cada punto nuevo, ¿qué clase esperas antes de ejecutar el modelo?
+
+Se clasifican tres puntos nuevos en escala original:
+
+\[
+(25, 25), \quad (70, 50), \quad (50, 30)
+\]
+
+Antes de predecir, se aplica el mismo escalamiento aprendido con los datos de entrenamiento. Esto es fundamental: el escalador debe entrenarse sólo con el conjunto de entrenamiento y luego aplicarse tanto a prueba como a nuevos datos.
+
+```{r nuevos-puntos-knn}
+nuevos_puntos <- tibble(
+  x1 = c(25, 70, 50),
+  x2 = c(25, 50, 30)
+)
+
+nuevos_puntos_scaled <- predict(preproc_2d, nuevos_puntos) %>%
+  as_tibble()
+
+pred_nuevos_knn <- predict(
+  modelo_knn,
+  newdata = nuevos_puntos_scaled,
+  type = "class"
+)
+
+nuevos_puntos_resultado <- nuevos_puntos_scaled %>%
+  mutate(
+    clase_predicha = pred_nuevos_knn,
+    punto = paste0("P", row_number())
+  )
+
+nuevos_puntos_resultado
+```
+
+```{r grafico-nuevos-puntos}
+ggplot() +
+  geom_point(
+    data = test_2d_scaled,
+    aes(x = x1, y = x2, color = clase),
+    size = 2.3,
+    alpha = 0.75
+  ) +
+  geom_point(
+    data = nuevos_puntos_resultado,
+    aes(x = x1, y = x2, color = clase_predicha),
+    shape = 4,
+    stroke = 2,
+    size = 6
+  ) +
+  geom_text(
+    data = nuevos_puntos_resultado,
+    aes(x = x1, y = x2, label = punto),
+    vjust = -1,
+    size = 4
+  ) +
+  labs(
+    title = "Clasificación de nuevos puntos con KNN",
+    subtitle = "Los puntos nuevos se muestran con una X",
+    x = expression(x[1]~"(escalado)"),
+    y = expression(x[2]~"(escalado)"),
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+# Conclusión
+
+> **Preguntas finales de cierre**
+>
+> 1. ¿Qué modelo fue más interpretable?
+> 2. ¿Qué modelo fue más flexible?
+> 3. ¿Qué diferencia hay entre explicar una predicción con reglas y explicarla por cercanía a vecinos?
+> 4. ¿Por qué no conviene elegir un modelo sólo por una métrica aislada?
+
+# Conclusión
+
+El árbol de decisión permite construir reglas interpretables para clasificar diamantes como de precio alto o bajo. Su ventaja principal es que permite seguir explícitamente el camino de decisión desde la raíz hasta una hoja, como si se tratara de una pauta jerárquica de preguntas.
+
+En el dataset bidimensional, los clasificadores manuales muestran cómo una frontera simple puede dividir el plano mediante reglas explícitas. KNN, en cambio, decide por cercanía local y puede generar fronteras más flexibles. La regresión logística estima probabilidades y produce una frontera lineal. Por eso, la comparación entre KNN y regresión logística no sólo debe mirar métricas, sino también la geometría del problema.

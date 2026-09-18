@@ -1,0 +1,826 @@
+---
+title: "Ayudantía 4 - Comparacion de metricas en Clasificación"
+---
+### Profesor: Alex Digenova
+### Ayudante: Alan Molina
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+paquetes <- c(
+  "ggplot2",
+  "dplyr",
+  "caret",
+  "class",
+  "e1071",
+  "MASS",
+  "tidyr"
+)
+
+instalar_si_falta <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, repos = "https://cloud.r-project.org")
+  }
+}
+
+invisible(lapply(paquetes, instalar_si_falta))
+
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(class)
+library(e1071)
+library(MASS)
+library(tidyr)
+
+set.seed(42)
+```
+
+# Métricas de Evaluación de Modelos de Clasificación
+
+Cuando entrenamos un modelo de clasificación, necesitamos formas **objetivas** de medir su desempeño y comparar las clases **reales** de las **clases predichas** por el modelo.
+
+Esto es especialmente relevante cuando una clase es más importante que otra, ¿Que problemas podrian abordar con este clasificador?.
+
+La matriz de confusión funciona como una tabla de revisión: muestra cuándo el modelo acertó y cuándo se equivocó, separando los errores según su tipo. 
+
+A partir de la **matriz de confusión** se pueden calcular **métricas de evaluación** como **accuracy**, **precision**, **recall**, **specificity** y **F1-score**, las cuales permiten analizar el comportamiento del modelo desde distintas perspectivas.
+---
+
+## Matriz de Confusión
+
+La matriz de confusión compara los valores **reales** con los **predichos** por el modelo:
+
+| Real \ Predicho  | Predijo 0 | Predijo 1 |
+|------------------|-----------|-----------|
+| **Era 0**        | TN        | FP        |
+| **Era 1**        | FN        | TP        |
+
+- **TP (True Positive)**: predijo 1 y era 1, es decir, acierto positivo.
+- **TN (True Negative)**: predijo 0 y era 0, es decir, acierto negativo.
+- **FP (False Positive)**: predijo 1 pero era 0, es decir, falsa alarma.
+- **FN (False Negative)**: predijo 0 pero era 1, es decir, no detectó un positivo.
+
+---
+
+## Principales Métricas
+
+- **Accuracy (Exactitud)**:
+
+$$
+\text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN}
+$$
+Responde a la pregunta: **¿qué porcentaje de todas las predicciones hizo correctamente el modelo?**
+
+Por ejemplo, si un modelo clasifica correctamente 90 casos de un total de 100, entonces su accuracy es:
+
+OJO: Si las clases estan muy desbalanceadas
+
+$$
+\text{Accuracy} = \frac{80+10}{80+10+5+5} = \frac{90}{100} = 0.90
+$$
+
+Esto significa que el modelo tuvo un **90% de exactitud**.
+
+Representa la proporción de casos correctamente clasificados respecto al total de predicciones realizadas.
+
+- **Precision (Precisión)**:
+
+$$
+\text{Precision} = \frac{TP}{TP + FP}
+$$
+
+Por ejemplo, si un modelo predice 40 casos como positivos, pero solo 32 de ellos realmente eran positivos, entonces:
+
+$$
+\text{Precision} = \frac{32}{32+6} = 0.80
+$$
+
+Esto significa que el modelo tuvo una **precisión del 80%** en sus predicciones positivas.
+
+Representa la proporción de predicciones positivas que realmente corresponden a casos positivos.
+
+- **Recall (Sensibilidad)**:
+
+$$
+\text{Recall} = \frac{TP}{TP + FN}
+$$
+
+
+Representa la proporción de casos positivos reales que fueron correctamente detectados por el modelo.
+
+El recall es especialmente importante cuando se quiere reducir la cantidad de **falsos negativos**.
+
+Sin embargo, esta métrica no indica si todas las predicciones positivas fueron confiables; para eso se utiliza la métrica **precision**.
+
+
+
+- **F1-Score**:
+
+$$
+F1 = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}
+$$
+Por ejemplo, si un modelo tiene:
+
+$$
+\text{Precision} = 0.90
+$$
+
+$$
+\text{Recall} = 0.50
+$$
+
+entonces:
+
+$$
+F1 = 2 \times \frac{0.90 \times 0.50}{0.90 + 0.50} = 0.64
+$$
+
+Aunque la precision es alta, el recall es bajo, por lo que el F1-Score también disminuye. Esto muestra que el modelo predice positivos de forma confiable, pero todavía deja varios positivos reales sin detectar.
+
+Por lo tanto, un F1-Score alto indica que el modelo mantiene un buen equilibrio entre **precision** y **recall**. Es decir, el modelo no solo predice positivos de forma confiable, sino que también logra encontrar una buena proporción de los positivos reales.
+
+
+Representa el equilibrio entre la confiabilidad de las predicciones positivas y la capacidad del modelo para detectar los positivos reales.
+
+---
+
+## ¿Cuándo usar cada una?
+
+- Usa **accuracy** si las clases están balanceadas.
+- Usa **precision** si quieres evitar falsos positivos, por ejemplo, spam.
+- Usa **recall** si quieres evitar falsos negativos, por ejemplo, detección de enfermedad.
+- Usa **F1-score** si quieres un balance entre precision y recall.
+
+---
+
+```{r funciones-reporte}
+reporte_clasificacion <- function(cm) {
+  by_class <- cm$byClass
+
+  if (is.null(dim(by_class))) {           # binario
+    by_class <- as.data.frame(t(by_class))
+    by_class$Clase <- cm$positive
+  } else {                                # Multiclase
+    by_class <- as.data.frame(by_class)
+    by_class$Clase <- rownames(by_class)
+  }
+#Estandarizacion de las columnas
+  columnas <- intersect(
+    c(
+      "Clase", "Precision", "Recall",
+      "F1", "Specificity", "Neg Pred Value",
+      "Balanced Accuracy"
+    ),
+    names(by_class)
+  )
+
+  by_class <- by_class[, columnas, drop = FALSE]
+  rownames(by_class) <- NULL
+
+  by_class %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)))
+}
+
+# Metricas Generales del modelo y no por clases solamente
+resumen_global <- function(cm) {
+  data.frame(
+    Accuracy = round(unname(cm$overall["Accuracy"]), 3), # Cuanto acerto real
+    Kappa = round(unname(cm$overall["Kappa"]), 3)  # Modelo bajo el azar
+  )
+}
+
+
+#Graficar matriz de confusión
+graficar_matriz_confusion <- function(cm, titulo = "Matriz de Confusión") {
+  cm_df <- as.data.frame(cm$table)
+  colnames(cm_df) <- c("Prediccion", "Real", "Frecuencia")
+
+  ggplot(cm_df, aes(x = Prediccion, y = Real, fill = Frecuencia)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Frecuencia), size = 5) +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    labs(
+      title = titulo,
+      x = "Predicción",
+      y = "Valor real",
+      fill = "Frecuencia"
+    ) +
+    theme_minimal()
+}
+```
+
+---
+
+# KNN con el dataset `diamonds`
+
+El objetivo es predecir si un diamante tiene corte **Ideal** o **No Ideal** usando variables numéricas.
+
+## Cargar dataset y preparar datos
+
+```{r cargar-diamonds}
+data("diamonds", package = "ggplot2")
+
+df <- diamonds %>%
+  mutate(
+    ideal_cut = factor(
+      ifelse(cut == "Ideal", "Ideal", "No_Ideal"),
+      levels = c("No_Ideal", "Ideal")
+    )
+  )
+
+head(df)
+```
+
+## Seleccionar variables predictoras y variable objetivo
+
+```{r preparar-datos-knn}
+features <- c("carat", "depth", "table", "x", "y", "z")
+
+X <- df[, features] # Caracteristicas de diamantes
+y <- df$ideal_cut # Indicar si el corte es ideal o no
+
+idx_train <- caret::createDataPartition(y, p = 0.8, list = FALSE)
+
+X_train <- X[idx_train, ]
+X_test <- X[-idx_train, ]
+
+y_train <- y[idx_train]
+y_test <- y[-idx_train]
+
+#Metodo de estandarizacion de variables por distancias
+preproceso <- caret::preProcess(X_train, method = c("center", "scale")) 
+X_train_scaled <- predict(preproceso, X_train)
+X_test_scaled <- predict(preproceso, X_test)
+```
+
+## Explorar conteo de clase positiva
+
+```{r exploracion-diamonds}
+table(df$ideal_cut)
+sum(df$ideal_cut == "Ideal")
+```
+
+## Entrenar modelo KNN
+
+```{r entrenar-knn}
+y_pred_knn <- class::knn(
+  train = X_train_scaled,
+  test = X_test_scaled,
+  cl = y_train,
+  k = 5
+)
+
+cm_knn <- caret::confusionMatrix(
+  data = y_pred_knn,
+  reference = y_test,
+  positive = "Ideal"
+)
+
+cm_knn$table
+```
+## Visualizar matriz de confusión de KNN
+
+```{r matriz-confusion-knn, fig.width=7, fig.height=5}
+graficar_matriz_confusion(
+  cm_knn,
+  titulo = "Matriz de Confusión - KNN Clasificador"
+)
+```
+
+## Reporte de clasificación para KNN
+
+```{r reporte-knn}
+reporte_clasificacion(cm_knn)
+resumen_global(cm_knn)
+```
+
+Clase: Ideal
+Analiza qué tan bien el modelo identifica los casos que realmente pertenecen a esta categoría.
+
+Precision = 0.823
+Cuando el modelo predice que un caso es Ideal, acierta el 82.3% de las veces.
+
+Recall = 0.871
+El modelo logra detectar el 87.1% de los casos que realmente son Ideal. Esto significa que recupera una alta proporción de los casos positivos y deja escapar relativamente pocos.
+
+F1 = 0.846
+Indica un buen equilibrio entre predecir correctamente la clase Ideal y encontrar la mayoría de los casos reales de esa clase.
+
+Specificity = 0.875
+El modelo identifica correctamente el 87.5% de los casos que no son Ideal. Esto indica que también distingue bien los casos negativos, no solo los positivos.
+
+Neg Pred Value = 0.911
+Cuando el modelo predice que un caso no es Ideal, acierta el 91.1% de las veces. Es una métrica alta, por lo que el modelo es especialmente confiable descartando la clase Ideal.
+
+Balanced Accuracy = 0.873
+Resume el rendimiento considerando tanto la detección de casos Ideal como la identificación de casos no Ideal. Un valor de 0.873 indica un rendimiento equilibrado y sólido.
+
+---
+
+# Regresión Logística con el dataset `diamonds`
+
+La regresión logística permite clasificar observaciones cuando la variable objetivo es binaria. En este caso, se busca predecir si un diamante tiene corte **Ideal** o **No Ideal** usando variables numéricas.
+
+```{r regresion-logistica-preparacion}
+df_log <- diamonds %>%
+  mutate(
+    ideal_cut = factor(
+      ifelse(cut == "Ideal", "Ideal", "No_Ideal"),
+      levels = c("No_Ideal", "Ideal")
+    )
+  )
+
+X <- df_log[, features]
+y <- df_log$ideal_cut
+
+idx_train <- caret::createDataPartition(y, p = 0.8, list = FALSE)
+
+X_train <- X[idx_train, ]
+X_test <- X[-idx_train, ]
+
+y_train <- y[idx_train]
+y_test <- y[-idx_train]
+
+preproceso <- caret::preProcess(X_train, method = c("center", "scale"))
+X_train_scaled <- predict(preproceso, X_train)
+X_test_scaled <- predict(preproceso, X_test)
+
+train_log <- data.frame(ideal_cut = y_train, X_train_scaled)
+test_log <- data.frame(X_test_scaled)
+```
+
+## Entrenar el modelo de regresión logística
+
+```{r entrenar-regresion-logistica}
+modelo_log <- stats::glm(
+  ideal_cut ~ .,
+  data = train_log,
+  family = binomial()
+)
+
+prob_log <- predict(
+  modelo_log,
+  newdata = test_log,
+  type = "response"
+)
+
+y_pred_log <- factor(
+  ifelse(prob_log >= 0.5, "Ideal", "No_Ideal"),
+  levels = c("No_Ideal", "Ideal")
+)
+
+cm_log <- caret::confusionMatrix(
+  data = y_pred_log,
+  reference = y_test,
+  positive = "Ideal"
+)
+
+cm_log$table
+```
+## Visualizar matriz de confusión de Regresión Logística
+
+```{r matriz-confusion-logistica, fig.width=7, fig.height=5}
+graficar_matriz_confusion(
+  cm_log,
+  titulo = "Matriz de Confusión - Regresión Logística"
+)
+```
+
+## Reporte de clasificación para Regresión Logística
+
+```{r reporte-regresion-logistica}
+reporte_clasificacion(cm_log)
+resumen_global(cm_log)
+```
+
+
+---
+
+## ¿Qué hacer si las métricas del modelo no son buenas?
+
+A veces, entrenamos un modelo de clasificación, como KNN o Regresión Logística, y sus resultados no son satisfactorios. Esto puede verse reflejado en una **precisión baja**, **recall pobre** o muchos **errores en la matriz de confusión**.
+
+Aquí van algunas estrategias reales que se usan en la práctica para **mejorar el desempeño** del modelo:
+
+### 1. Recolectar más datos
+
+Más datos permiten representar mejor el problema y aumentar la capacidad de generalización del modelo. Si el dataset es pequeño o poco variado, el modelo puede aprender casos raros o ruido.
+
+### 2. Selección y transformación de variables
+
+- Eliminar variables irrelevantes o ruidosas.
+- Crear nuevas variables mediante ingeniería de características.
+- Aplicar escalamiento o normalización si las variables tienen diferentes magnitudes. Esto es relevante para KNN y también puede ayudar en regresión logística.
+
+### 3. Balancear las clases
+
+Si una clase es mucho más frecuente que otra, el modelo puede sesgarse hacia la clase mayoritaria.
+
+Algunas soluciones son:
+
+- **Undersampling** de la clase mayoritaria.
+- **Oversampling** de la clase minoritaria.
+- Técnicas como **SMOTE**.
+
+### 4. Probar otros algoritmos
+
+No todos los modelos funcionan igual para todos los problemas. Si KNN o Regresión Logística no rinden bien, se pueden probar Árboles de Decisión, Random Forest, Naive Bayes, SVM o modelos basados en boosting.
+
+### 5. Ajustar hiperparámetros
+
+Muchos modelos tienen parámetros que afectan su comportamiento. Por ejemplo, `k` en KNN, regularización en Regresión Logística o profundidad máxima en Árboles de Decisión.
+
+En R, estos ajustes pueden hacerse con paquetes como `caret`, `tidymodels` o funciones específicas de cada modelo.
+
+### 6. Validación cruzada
+
+La validación cruzada evita que el rendimiento dependa de una sola división entrenamiento/prueba. Un enfoque común es k-fold cross-validation.
+
+### 7. Limpiar y tratar datos nulos o extremos
+
+También es importante revisar outliers, valores faltantes, duplicados e inconsistencias.
+
+---
+
+# Clasificador Naive Bayes
+
+## ¿Qué es?
+
+Naive Bayes es un modelo de clasificación **basado en probabilidades**, fundamentado en el **Teorema de Bayes**, con el supuesto de que **las variables o atributos son independientes entre sí**.
+
+Se llama *"Naive"* porque **asume independencia total entre características**, lo cual rara vez ocurre en la práctica, pero aun así puede funcionar bien.
+
+---
+
+## Teorema de Bayes
+
+$$
+P(A|B) = \frac{P(B|A) \cdot P(A)}{P(B)}
+$$
+
+Aplicado a clasificación:
+
+$$
+P(\text{Clase} | \text{Datos}) = \frac{P(\text{Datos} | \text{Clase}) \cdot P(\text{Clase})}{P(\text{Datos})}
+$$
+
+Dado un nuevo punto, Naive Bayes elige la clase con mayor probabilidad posterior.
+
+---
+
+## Supuesto "naive"
+
+$$
+P(x_1, x_2, \dots, x_n | C) = P(x_1 | C) \cdot P(x_2 | C) \cdot \cdots \cdot P(x_n | C)
+$$
+
+Este supuesto reduce el costo computacional, ya que evita modelar explícitamente la relación entre variables.
+
+---
+
+## Tipos de Naive Bayes
+
+- **Bernoulli Naive Bayes**: para datos binarios, por ejemplo presencia/ausencia.
+- **Multinomial Naive Bayes**: para conteos, por ejemplo texto o frecuencia de palabras.
+- **Gaussian Naive Bayes**: para variables continuas, asumiendo distribución normal.
+
+---
+
+# Naive Bayes Gaussiano con `iris`
+
+En R se usa `e1071::naiveBayes()`, que permite entrenar Naive Bayes de forma equivalente al enfoque gaussiano cuando las variables predictoras son numéricas.
+
+## Cargar datos y separar entrenamiento/prueba
+
+```{r cargar-iris-naive-bayes}
+df_iris <- iris
+
+X <- df_iris[, 1:4]
+y <- df_iris$Species
+
+idx_train <- caret::createDataPartition(y, p = 0.8, list = FALSE)
+
+X_train <- X[idx_train, ]
+X_test <- X[-idx_train, ]
+
+y_train <- y[idx_train]
+y_test <- y[-idx_train]
+```
+
+## Entrenar y predecir con Naive Bayes Gaussiano
+
+```{r entrenar-naive-bayes-iris}
+modelo_nb <- e1071::naiveBayes(
+  x = X_train,
+  y = y_train
+)
+
+y_pred_nb <- predict(
+  modelo_nb,
+  newdata = X_test,
+  type = "class"
+)
+
+cm_nb <- caret::confusionMatrix(
+  data = y_pred_nb,
+  reference = y_test
+)
+
+cm_nb$table
+```
+## Visualización de matriz de confusión
+
+```{r matriz-confusion-naive-bayes-iris, fig.width=7, fig.height=5}
+graficar_matriz_confusion(
+  cm_nb,
+  titulo = "Matriz de Confusión - Naive Bayes"
+)
+```
+## Reporte de clasificación para Naive Bayes
+
+```{r reporte-naive-bayes-iris}
+reporte_clasificacion(cm_nb)
+resumen_global(cm_nb)
+```
+
+---
+
+# Naive Bayes vs. LDA vs. QDA
+
+## ¿Qué tienen en común?
+
+- Los tres son **modelos de clasificación probabilística**.
+- Usan el **Teorema de Bayes** para calcular probabilidades.
+- Funcionan bien en problemas multiclase y son rápidos de entrenar.
+
+---
+
+## 1. Naive Bayes
+
+- Supone que **las variables son independientes entre sí**.
+- Para clasificación, elige la clase que maximiza:
+
+$$
+P(C_k | x) \propto P(x_1|C_k) \cdot P(x_2|C_k) \cdot \ldots \cdot P(C_k)
+$$
+
+- Asume una distribución por característica. En el caso gaussiano, cada variable continua se modela con una normal por clase.
+
+---
+
+## 2. LDA – Linear Discriminant Analysis
+
+- Supone que las variables siguen una distribución normal multivariada.
+- No asume independencia entre variables, a diferencia de Naive Bayes.
+- Asume que todas las clases comparten la misma matriz de covarianza.
+
+Frontera de decisión: **lineal**.
+
+$$
+\delta_k(x) = x^T \Sigma^{-1} \mu_k - \frac{1}{2} \mu_k^T \Sigma^{-1} \mu_k + \log(P(C_k))
+$$
+
+---
+
+## 3. QDA – Quadratic Discriminant Analysis
+
+QDA también usa una distribución gaussiana multivariada, pero permite una matriz de covarianza diferente para cada clase.
+
+Frontera de decisión: **cuadrática**.
+
+$$
+\delta_k(x) = -\frac{1}{2} \log|\Sigma_k| - \frac{1}{2}(x - \mu_k)^T \Sigma_k^{-1}(x - \mu_k) + \log(P(C_k))
+$$
+
+---
+
+## Comparación general
+
+| Modelo       | Independencia | Covarianza                  | Frontera     | Librería en R |
+|--------------|---------------|-----------------------------|--------------|---------------|
+| Naive Bayes  | Sí            | Diagonal, por independencia | No lineal    | `e1071`       |
+| LDA          | No            | Igual para todas las clases | Lineal       | `MASS`        |
+| QDA          | No            | Una por clase               | Cuadrática   | `MASS`        |
+
+---
+
+# Comparación con `iris`: Naive Bayes, LDA y QDA
+
+## Cargar y separar datos
+
+```{r cargar-iris-comparacion}
+df_iris <- iris
+
+X <- df_iris[, 1:4]
+y <- df_iris$Species
+
+idx_train <- caret::createDataPartition(y, p = 0.8, list = FALSE)
+
+X_train <- X[idx_train, ]
+X_test <- X[-idx_train, ]
+
+y_train <- y[idx_train]
+y_test <- y[-idx_train]
+
+preproceso <- caret::preProcess(X_train, method = c("center", "scale"))
+X_train_scaled <- predict(preproceso, X_train)
+X_test_scaled <- predict(preproceso, X_test)
+```
+
+## Entrenar modelos
+
+```{r entrenar-modelos-iris}
+modelo_nb_iris <- e1071::naiveBayes(
+  x = X_train,
+  y = y_train
+)
+
+train_lda <- data.frame(Species = y_train, X_train_scaled)
+test_lda <- data.frame(X_test_scaled)
+
+modelo_lda_iris <- MASS::lda(Species ~ ., data = train_lda)
+modelo_qda_iris <- MASS::qda(Species ~ ., data = train_lda)
+```
+
+## Evaluar modelos
+
+```{r evaluar-modelos-iris}
+pred_nb_iris <- predict(modelo_nb_iris, newdata = X_test, type = "class")
+pred_lda_iris <- predict(modelo_lda_iris, newdata = test_lda)$class
+pred_qda_iris <- predict(modelo_qda_iris, newdata = test_lda)$class
+
+cm_nb_iris <- caret::confusionMatrix(pred_nb_iris, y_test)
+cm_lda_iris <- caret::confusionMatrix(pred_lda_iris, y_test)
+cm_qda_iris <- caret::confusionMatrix(pred_qda_iris, y_test)
+
+cm_nb_iris$table
+reporte_clasificacion(cm_nb_iris)
+resumen_global(cm_nb_iris)
+
+cm_lda_iris$table
+reporte_clasificacion(cm_lda_iris)
+resumen_global(cm_lda_iris)
+
+cm_qda_iris$table
+reporte_clasificacion(cm_qda_iris)
+resumen_global(cm_qda_iris)
+```
+
+---
+
+# Comparación con dataset sintético: Naive Bayes, LDA y QDA
+
+En esta sección se crea un dataset artificial con tres clases, cinco variables, cierto nivel de ruido y clases no perfectamente separables. El objetivo es comparar cómo se comportan Naive Bayes, LDA y QDA bajo un escenario menos limpio que `iris`.
+
+## Crear dataset sintético
+
+```{r crear-dataset-sintetico}
+set.seed(42)
+
+n_total <- 1000
+n_por_clase <- c(334, 333, 333)
+n_features <- 5
+
+medias <- matrix(
+  c(
+    -1.2,  0.0,  0.8,  0.0,  0.2,
+     0.6,  0.9, -0.4,  0.3, -0.1,
+     1.4, -0.8,  0.6, -0.3,  0.5
+  ),
+  nrow = 3,
+  byrow = TRUE
+)
+
+cov_base <- matrix(
+  c(
+    1.0, 0.4, 0.2, 0.1, 0.0,
+    0.4, 1.0, 0.3, 0.0, 0.1,
+    0.2, 0.3, 1.0, 0.2, 0.1,
+    0.1, 0.0, 0.2, 1.0, 0.3,
+    0.0, 0.1, 0.1, 0.3, 1.0
+  ),
+  nrow = 5,
+  byrow = TRUE
+)
+
+X_lista <- lapply(seq_len(3), function(i) {
+  MASS::mvrnorm(
+    n = n_por_clase[i],
+    mu = medias[i, ],
+    Sigma = cov_base
+  )
+})
+
+X <- do.call(rbind, X_lista)
+colnames(X) <- paste0("x", seq_len(n_features))
+
+y <- factor(
+  rep(c("Clase_0", "Clase_1", "Clase_2"), times = n_por_clase),
+  levels = c("Clase_0", "Clase_1", "Clase_2")
+)
+
+idx_ruido <- sample(seq_along(y), size = round(0.05 * n_total))
+
+for (i in idx_ruido) {
+  y[i] <- sample(setdiff(levels(y), as.character(y[i])), size = 1)
+}
+
+df_sintetico <- data.frame(y = y, X)
+
+head(df_sintetico)
+```
+
+## Separar en entrenamiento y prueba
+
+```{r separar-dataset-sintetico}
+idx_train <- caret::createDataPartition(df_sintetico$y, p = 0.7, list = FALSE)
+
+X_train <- df_sintetico[idx_train, paste0("x", seq_len(n_features))]
+X_test <- df_sintetico[-idx_train, paste0("x", seq_len(n_features))]
+
+y_train <- df_sintetico$y[idx_train]
+y_test <- df_sintetico$y[-idx_train]
+
+preproceso <- caret::preProcess(X_train, method = c("center", "scale"))
+X_train_scaled <- predict(preproceso, X_train)
+X_test_scaled <- predict(preproceso, X_test)
+```
+
+## Entrenar modelos
+
+```{r entrenar-modelos-sintetico}
+nb_sintetico <- e1071::naiveBayes(
+  x = X_train,
+  y = y_train
+)
+
+train_disc <- data.frame(y = y_train, X_train_scaled)
+test_disc <- data.frame(X_test_scaled)
+
+lda_sintetico <- MASS::lda(y ~ ., data = train_disc)
+qda_sintetico <- MASS::qda(y ~ ., data = train_disc)
+```
+
+## Evaluar modelos
+
+```{r evaluar-modelos-sintetico}
+pred_nb <- predict(nb_sintetico, newdata = X_test, type = "class")
+pred_lda <- predict(lda_sintetico, newdata = test_disc)$class
+pred_qda <- predict(qda_sintetico, newdata = test_disc)$class
+
+cm_nb_sint <- caret::confusionMatrix(pred_nb, y_test)
+cm_lda_sint <- caret::confusionMatrix(pred_lda, y_test)
+cm_qda_sint <- caret::confusionMatrix(pred_qda, y_test)
+
+cm_nb_sint$table
+reporte_clasificacion(cm_nb_sint)
+resumen_global(cm_nb_sint)
+
+cm_lda_sint$table
+reporte_clasificacion(cm_lda_sint)
+resumen_global(cm_lda_sint)
+
+cm_qda_sint$table
+reporte_clasificacion(cm_qda_sint)
+resumen_global(cm_qda_sint)
+```
+
+## Crear tabla comparativa
+
+```{r tabla-comparativa-sintetico}
+df_resultados <- bind_rows(
+  "Naive Bayes" = resumen_global(cm_nb_sint),
+  "LDA" = resumen_global(cm_lda_sint),
+  "QDA" = resumen_global(cm_qda_sint),
+  .id = "Modelo"
+)
+
+df_resultados
+```
+
+## Visualizar comparación de modelos
+
+```{r grafico-comparacion-sintetico, fig.width=9, fig.height=6}
+df_plot <- df_resultados %>%
+  tidyr::pivot_longer(
+    cols = c("Accuracy", "Kappa"),
+    names_to = "Metrica",
+    values_to = "Puntaje"
+  )
+
+ggplot(df_plot, aes(x = Modelo, y = Puntaje, fill = Metrica)) +
+  geom_col(position = "dodge") +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(
+    title = "Comparación de Naive Bayes vs LDA vs QDA",
+    x = "Modelo",
+    y = "Puntaje",
+    fill = "Métrica"
+  ) +
+  theme_minimal()
+```
+

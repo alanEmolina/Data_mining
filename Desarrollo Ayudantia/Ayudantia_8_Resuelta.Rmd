@@ -1,0 +1,1131 @@
+---
+title: "Ayudantía: clustering basado en densidad y análisis de asociación"
+subtitle: "DBSCAN, métricas de asociación y algoritmo Apriori"
+author: "Minería de Datos"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo=TRUE,
+  message=FALSE,
+  warning=FALSE,
+  fig.width=8,
+  fig.height=5
+)
+options(dplyr.summarise.inform=FALSE)
+```
+
+# 1. Propósito y resultados de aprendizaje
+
+La ayudantía profundiza en dos áreas del aprendizaje no supervisado. 
+A. Analisis una limitación geométrica de K-means y se introduce DBSCAN como método de clustering basado en densidad. 
+B. Desarrolla el análisis de asociación desde una perspectiva multidominio, utilizando ejemplos de ciberseguridad, salud, educación, bioinformática y mantenimiento industrial.
+
+# 2. Paquetes y reproducibilidad
+
+```{r paquetes}
+# Instalación previa, solo si resulta necesaria:
+# install.packages(c("tidyverse", "dbscan", "mclust", "arules", "arulesViz"))
+
+library(tidyverse)
+library(dbscan)
+library(mclust)
+library(arules)
+library(arulesViz)
+
+set.seed(123)
+```
+
+# 3. Conocimientos previos sobre K-means
+
+## 3.1 Preguntas de análisis previo
+
+1. ¿Qué información requiere K-means antes de iniciar el procedimiento?
+2. ¿Qué representa el centroide de un clúster?
+3. ¿Por qué se recomienda estandarizar las variables?
+4. ¿Qué propiedades caracterizan una partición de buena calidad?
+5. ¿K-means puede representar adecuadamente clústeres con cualquier geometría?
+
+## 3.2 Respuestas
+
+1. K-means requiere una matriz de variables cuantitativas y un número de clústeres \k\. También se recomienda fijar una semilla y utilizar varias inicializaciones mediante `nstart`.
+2. El centroide corresponde al vector de medias de las variables para las observaciones asignadas a un clúster. No necesariamente coincide con una observación real.
+3. La estandarización evita que las variables con escalas o varianzas mayores dominen la distancia euclidiana.
+4. Una partición de buena calidad presenta alta cohesión interna, alta separación entre grupos, estabilidad razonable e interpretación sustantiva.
+5. No. K-means favorece clústeres compactos, convexos y aproximadamente esféricos. Las estructuras curvas o no convexas pueden ser representadas de forma inadecuada.
+
+# 4. Limitación geométrica de K-means
+
+## 4.1 Preguntas de análisis previo
+
+Para dos grupos con forma de media luna, determine:
+
+1. El número de grupos visualmente identificables.
+2. Si la geometría observada es aproximadamente esférica.
+3. Si una frontera lineal permite separar completamente ambas estructuras.
+4. Si K-means debería recuperar la partición visual aun cuando se defina k=2.
+
+## 4.2 Respuestas
+
+1. Se identifican visualmente dos grupos.
+2. La geometría no es esférica; cada grupo presenta una forma curva y no convexa.
+3. Una única frontera lineal no permite separar completamente dos medias lunas entrelazadas.
+4. K-means puede producir dos clústeres numéricos sin recuperar las dos estructuras curvas completas, debido a su criterio basado en centroides.
+
+## 4.3 Generación de datos
+
+```{r generar-lunas}
+set.seed(123)
+
+n <- 150
+angulo_1 <- runif(n, 0, pi)
+angulo_2 <- runif(n, 0, pi)
+
+datos_lunas <- bind_rows(
+  tibble(
+    x=cos(angulo_1),
+    y=sin(angulo_1),
+    clase_real="Luna 1"
+  ),
+  tibble(
+    x=1-cos(angulo_2),
+    y=0.5-sin(angulo_2),
+    clase_real="Luna 2"
+  )
+) %>%
+  mutate(
+    x=x+rnorm(n(), 0, 0.06),
+    y=y+rnorm(n(), 0, 0.06)
+  )
+```
+
+```{r visualizar-lunas}
+ggplot(datos_lunas, aes(x, y)) +
+  geom_point(alpha=0.75) +
+  coord_equal() +
+  labs(
+    title="Datos con dos grupos no convexos",
+    x="Variable x",
+    y="Variable y"
+  ) +
+  theme_minimal()
+```
+
+## 4.4 Hipótesis previa a la aplicación de K-means
+
+1. ¿Cómo se dividirá probablemente el plano?
+2. ¿La partición respetará la curvatura de los grupos?
+3. ¿Un valor mayor de `nstart` corregirá la limitación geométrica?
+4. ¿La dificultad corresponde a una inicialización deficiente o al criterio del algoritmo?
+
+### 4.5 Respuestas 
+
+1. El plano se dividirá en regiones de Voronoi alrededor de los centroides.
+2. La partición no debería respetar completamente la forma curva.
+3. No. `nstart` reduce el riesgo de una solución local deficiente, pero no modifica el criterio geométrico.
+4. La dificultad corresponde principalmente al supuesto de grupos compactos alrededor de centroides.
+
+## 4.6 Aplicación de K-means
+
+```{r kmeans-lunas}
+modelo_kmeans <- kmeans(
+  datos_lunas %>% select(x, y),
+  centers=2,
+  nstart=50
+)
+
+datos_lunas <- datos_lunas %>%
+  mutate(
+    cluster_kmeans=factor(modelo_kmeans$cluster)
+  )
+```
+
+```{r visualizar-kmeans-lunas}
+ggplot(datos_lunas, aes(x, y, color=cluster_kmeans)) +
+  geom_point(alpha=0.75) +
+  coord_equal() +
+  labs(
+    title="Partición obtenida mediante K-means",
+    x="Variable x",
+    y="Variable y",
+    color="Clúster"
+  ) +
+  theme_minimal()
+```
+
+## 4.7 Observaciones
+
+1. K-means obtiene dos clústeres, pero no necesariamente coincide con las dos lunas completas.
+2. El procedimiento minimiza la suma de distancias cuadráticas de las observaciones respecto de sus centroides.
+3. El resultado es coherente con el objetivo matemático del algoritmo.
+4. La discrepancia entre la partición esperada y la obtenida se explica por la geometría no convexa de los datos.
+5. Un método basado en densidad puede representar mejor regiones curvas conectadas.
+
+# 5. DBSCAN: clustering basado en densidad
+
+DBSCAN define los clústeres como regiones de alta densidad conectadas entre sí. No utiliza centroides y no requiere especificar directamente el número de grupos.
+
+## 5.1 Preguntas de análisis previo
+
+1. ¿La definición basada en densidad requiere centroides?
+2. ¿Es necesario fijar previamente el número de clústeres?
+3. ¿Cómo debería clasificarse una observación aislada?
+4. ¿La conectividad por densidad permite reconocer formas curvas?
+
+## 5.2 Respuestas 
+
+1. No. La pertenencia depende de vecindarios densos y conectividad.
+2. No se fija \(k\) de manera directa. El número de clústeres emerge de los datos y de los parámetros.
+3. Una observación aislada puede clasificarse como ruido.
+4. Sí. DBSCAN puede seguir estructuras no convexas cuando existe conectividad por densidad.
+
+## 5.3 Parámetros fundamentales
+
+DBSCAN utiliza dos parámetros:
+
+- `eps`: radio utilizado para definir el vecindario.
+- `minPts`: cantidad mínima de observaciones requerida para considerar una región como densa.
+
+Las observaciones se clasifican como:
+
+- punto núcleo;
+- punto frontera;
+- ruido.
+
+## 5.4 Análisis del efecto de los parámetros
+
+1. ¿Qué efecto produce un valor de `eps` demasiado pequeño?
+2. ¿Qué efecto produce un valor de `eps` demasiado grande?
+3. ¿Qué efecto produce el aumento de `minPts`?
+4. ¿Existe un valor universal de `eps`?
+
+## 5.5 Respuestas
+
+1. Un valor pequeño de `eps` puede fragmentar clústeres reales y aumentar el número de observaciones clasificadas como ruido.
+2. Un valor grande puede conectar regiones distintas y fusionarlas en un único clúster.
+3. El aumento de `minPts` exige mayor densidad para formar puntos núcleo; puede aumentar el ruido y eliminar grupos pequeños.
+4. No existe un valor universal. La selección depende de la escala, la densidad, `minPts`, el gráfico de distancias k-NN y el conocimiento del dominio.
+
+## 5.6 Aplicación de DBSCAN
+
+```{r dbscan-lunas}
+modelo_dbscan <- dbscan(
+  datos_lunas %>% select(x, y),
+  eps=0.18,
+  minPts=5
+)
+
+datos_lunas <- datos_lunas %>%
+  mutate(
+    cluster_dbscan=if_else(
+      modelo_dbscan$cluster==0,
+      "Ruido",
+      paste0("C", modelo_dbscan$cluster)
+    )
+  )
+```
+
+```{r visualizar-dbscan-lunas}
+ggplot(datos_lunas, aes(x, y, color=cluster_dbscan)) +
+  geom_point(alpha=0.75) +
+  coord_equal() +
+  labs(
+    title="Partición obtenida mediante DBSCAN",
+    x="Variable x",
+    y="Variable y",
+    color="Resultado"
+  ) +
+  theme_minimal()
+```
+
+## 5.7 Evaluación externa mediante ARI
+
+ARI significa Adjusted Rand Index o Índice de Rand Ajustado. 
+Es una métrica utilizada para comparar dos particiones de las mismas observaciones.
+
+ARI evita que la comparacion directa de los números, hiciera que todas las observaciones se vieran como mal clasificadas porque no compara el valor numérico de las etiquetas; compara las relaciones entre pares de observaciones.
+
+Agrupación conocida de las medias lunas  vs. Agrupación encontrada por el algoritmo
+
+La variable `clase_real` se conoce porque los datos fueron simulados. Esta variable no participa en la construcción de los clústeres y se utiliza únicamente como referencia externa.
+
+```{r comparar-ari}
+ari_kmeans <- adjustedRandIndex(
+  datos_lunas$clase_real,
+  modelo_kmeans$cluster
+)
+
+ari_dbscan <- adjustedRandIndex(
+  datos_lunas$clase_real,
+  modelo_dbscan$cluster
+)
+
+tibble(
+  numero_clusters=length(
+    setdiff(unique(modelo_dbscan$cluster), 0)
+  ),
+  puntos_ruido=sum(modelo_dbscan$cluster==0),
+  porcentaje_ruido=100*mean(modelo_dbscan$cluster==0),
+  ARI_kmeans=ari_kmeans,
+  ARI_dbscan=ari_dbscan
+)
+```
+### Interprectacion de ARI
+
+|           ARI | Interpretación                                |
+| ------------: | :-------------------------------------------- |
+|           (1) | Las dos particiones son idénticas             |
+| Cercano a (1) | Concordancia alta                             |
+| Cercano a (0) | Concordancia semejante a la esperada por azar |
+| Menor que (0) | Concordancia inferior a la esperada por azar  |
+
+
+## 5.8 Onservaciones de los resultados
+
+1. Un ARI mayor indica una concordancia superior con la estructura simulada.
+2. El valor 0 de DBSCAN identifica observaciones clasificadas como ruido.
+3. DBSCAN no es universalmente superior a K-means.
+4. K-means suele ser eficiente y adecuado para grupos compactos.
+5. DBSCAN puede presentar dificultades cuando los grupos poseen densidades marcadamente diferentes.
+6. OPTICS y HDBSCAN constituyen alternativas cuando la densidad varía de manera importante.
+
+## 5.9 Comparación conceptual
+
+| Característica         | K-means                          | DBSCAN                        |
+|------------------------|----------------------------------|-------------------------------|
+| Definición de grupo    | Cercanía a centroides            | Región densa conectada        |
+| Número de clústeres    | Se especifica mediante \(k\)     | Se determina indirectamente   |
+| Formas no convexas     | Representación limitada          | Representación adecuada       |
+| Detección de ruido     | No                               | Sí                            |
+| Parámetros principales | \(k\), `nstart`                  | `eps`, `minPts`               |
+| Sensibilidad principal | Escala, inicialización, outliers | Densidad, escala y parámetros |
+
+# 6. Transición hacia el análisis de asociación
+
+El análisis de asociación identifica conjuntos de elementos que aparecen conjuntamente con una frecuencia relevante. La unidad de análisis puede ser cualquier unidad que contenga un conjunto de eventos, atributos o elementos discretos.
+
+## 6.3 Ámbitos de aplicación
+
+| Dominio        | Unidad transaccional| Ejemplos de ítems                         | Objetivo analítico                     |
+|----------------|---------------------|-------------------------------------------|----------------------------------------|
+| Ciberseguridad | Sesión o incidente  | inicio fallido, ubicacion inusual         | Identificar alertas que coocurren      |
+| Salud          | Episodio clínico    | fiebre, tos, examen positivo, medicamento | Identificar hallazgos asociados        |
+| Educación      | Estudiante-semana   | video, foro, quiz, tarea                  | Identificar actividades concurrentes   |
+| Bioinformática | Muestra o paciente  | mutaciones, genes, rutas alteradas        | Identificar alteraciones coocurrentes  |
+| Mantenimiento  | Incidente de equipo | vibración, temperatura, alarma            | Identificar señales asociadas a fallas |
+| Navegación web | Sesión              | páginas, búsquedas, acciones              | Identificar recorridos frecuentes      |
+
+# 7. Caso de estudio: eventos de ciberseguridad
+
+## 7.1 Datos transaccionales
+
+| Sesión | Eventos observados                                                                |
+|--------|-----------------------------------------------------------------------------------|
+| S1     | inicio fallido, dispositivo nuevo, cambio de ubicación                            |
+| S2     | inicio fallido, restablecimiento de clave                                         |
+| S3     | dispositivo nuevo, cambio de ubicación, MFA fallido                               |
+| S4     | inicio fallido, dispositivo nuevo, restablecimiento de clave                      |
+| S5     | inicio fallido, dispositivo nuevo, cambio de ubicación, restablecimiento de clave |
+
+## 7.2 Preguntas de análisis previo
+
+1. ¿Qué eventos son más frecuentes?
+2. ¿Qué pares aparecen al menos dos veces?
+3. ¿Cómo se representa la información mediante una matriz binaria?
+4. ¿La coocurrencia entre dos eventos demuestra una relación causal?
+
+## 7.3 Respuestas
+
+1. `inicio_fallido` y `dispositivo_nuevo` aparecen en 4 de las 5 sesiones.
+2. Los pares frecuentes incluyen 
+`{inicio_fallido, dispositivo_nuevo}`, 
+`{inicio_fallido, cambio_ubicacion}`, 
+`{inicio_fallido, restablecimiento_clave}`, 
+`{dispositivo_nuevo, cambio_ubicacion}`,
+`{dispositivo_nuevo, restablecimiento_clave}`.
+3. Cada fila representa una sesión y cada columna un evento. El valor 1 indica presencia y el valor 0 indica ausencia.
+4. No. La coocurrencia no establece causalidad.
+
+## 7.4 Representación binaria
+
+| Sesión | inicio  | dispositivo | cambio    | restablecimiento |   MFA    |
+|        | fallido | nuevo       | ubicación |      clave       | fallido  |
+|--------|---------|-------------|-----------|------------------|----------|
+| S1     | 1       | 1           | 1         | 0                | 0        |
+| S2     | 1       | 0           | 0         | 1                | 0        |
+| S3     | 0       | 1           | 1         | 0                | 1        |
+| S4     | 1       | 1           | 0         | 1                | 0        |
+| S5     | 1       | 1           | 1         | 1                | 0        |
+
+## 7.5 Itemsets y reglas
+
+Un ítem corresponde a un evento individual. Un itemset corresponde a un conjunto de eventos.
+
+{inicio fallido, cambio de ubicación}
+
+Una regla de asociación se expresa como:
+
+**[X → Y]**
+
+- X corresponde al antecedente;
+- Y corresponde al consecuente;
+- X e Y no comparten elementos.
+
+Ejemplo:
+
+{inicio fallido, cambio de ubicación} → {dispositivo nuevo}
+
+La interpretación correcta es la siguiente:
+
+> Entre las sesiones que presentan inicio fallido y cambio de ubicación, el evento dispositivo nuevo aparece con una frecuencia determinada.
+
+La regla no implica que los eventos del antecedente causen el consecuente.
+
+# 8. Soporte
+
+El soporte mide la proporción de transacciones en las que aparecen conjuntamente todos los elementos del antecedente y del consecuente de una regla.
+
+Considere una regla de asociación de la forma:
+
+**X → Y**
+
+El soporte se calcula como:
+
+$$
+\operatorname{support}(X \rightarrow Y)
+=
+\operatorname{support}(X \cup Y)
+=
+\frac{\text{número de transacciones que contienen todos los elementos de } X \text{ e } Y}
+{\text{número total de transacciones}}
+$$
+
+Para la regla:
+
+**{inicio fallido, cambio de ubicación} → {dispositivo nuevo}**
+
+la combinación completa aparece en las sesiones S1 y S5. Como existen cinco sesiones en total:
+
+$$
+\operatorname{support}
+=
+\frac{2}{5}
+=
+0.40
+$$
+
+> **Interpretación**
+>
+> El soporte de la regla es 0,40. Esto significa que el 40 % de las sesiones contiene simultáneamente los eventos inicio fallido, cambio de ubicación y dispositivo nuevo.
+
+De forma general, si un itemset aparece en 20 de 100 transacciones, su soporte es 0,20. Esto significa que el conjunto aparece en el 20 % de las transacciones analizadas.
+
+## 8.1 Preguntas de análisis
+
+1. ¿Por qué el denominador corresponde al total de sesiones?
+2. ¿Qué diferencia existe entre frecuencia relativa y conteo absoluto?
+3. ¿Puede una regla con soporte bajo resultar relevante?
+
+## 8.2 Respuestas
+
+1. El soporte cuantifica la frecuencia global del patrón en toda la base.
+2. La frecuencia relativa permite comparar bases de distinto tamaño; el conteo absoluto permite evaluar cuántos casos sustentan la regla.
+3. Sí. En dominios como fraude, fallas críticas o enfermedades raras, una regla poco frecuente puede ser importante, pero requiere validación rigurosa.
+
+## 8.3 Interpretación multidominio
+
+- Ciberseguridad: proporción de sesiones que contiene una combinación de alertas.
+- Salud: proporción de episodios que contiene determinados síntomas y hallazgos.
+- Educación: proporción de semanas que contiene un conjunto de actividades.
+- Mantenimiento: proporción de incidentes que contiene determinadas señales.
+
+# 9. Confianza
+
+La confianza mide la proporción de transacciones que contienen el consecuente entre todas las transacciones que contienen el antecedente.
+
+También puede interpretarse como la probabilidad empírica de observar **Y** cuando ya se ha observado **X**.
+
+Considere una regla de asociación de la forma:
+
+**X → Y**
+
+La confianza se calcula como:
+
+$$
+\operatorname{confidence}(X \rightarrow Y)
+=
+\frac{\operatorname{support}(X \cup Y)}
+{\operatorname{support}(X)}
+$$
+
+Para la regla:
+
+**{inicio fallido, cambio de ubicación} → {dispositivo nuevo}**
+
+el antecedente aparece en las sesiones S1 y S5. En ambas sesiones también aparece el evento `dispositivo_nuevo`.
+
+Por tanto:
+
+$$
+\operatorname{confidence}
+=
+\frac{2}{2}
+=
+1
+$$
+
+> **Interpretación**
+>
+> La confianza de la regla es 1, equivalente a 100 %. Esto significa que, dentro de las sesiones analizadas, todas las sesiones que presentaron simultáneamente inicio fallido y cambio de ubicación también presentaron un dispositivo nuevo.
+
+> **Precaución**
+>
+> Una confianza alta no implica necesariamente que la asociación sea relevante. El consecuente puede ser muy frecuente por sí solo. Por esta razón, la confianza debe analizarse junto con el soporte y el lift.
+
+## 9.1 Preguntas de análisis
+
+1. ¿Qué diferencia existe entre soporte y confianza?
+2. ¿Una confianza alta garantiza una asociación relevante?
+3. ¿Qué problema aparece cuando el consecuente es extremadamente frecuente?
+
+## 9.2 Respuestas
+
+1. El soporte mide frecuencia global; la confianza mide frecuencia condicional.
+2. No. Una confianza alta puede explicarse por la elevada frecuencia basal del consecuente.
+3. Un consecuente frecuente puede aparecer en muchas reglas con confianza alta, aunque el antecedente aporte poca información.
+
+# 10. Lift
+
+El lift compara la frecuencia con que el antecedente y el consecuente aparecen juntos con la frecuencia que se esperaría si ambos fueran independientes.
+
+Considere una regla de asociación de la forma:
+
+**X → Y**
+
+El lift se calcula como:
+
+$$
+\operatorname{lift}(X \rightarrow Y)
+=
+\frac{\operatorname{confidence}(X \rightarrow Y)}
+{\operatorname{support}(Y)}
+$$
+
+Para la regla:
+
+**{inicio fallido, cambio de ubicación} → {dispositivo nuevo}**
+
+la confianza obtenida es 1. Además, el evento `dispositivo_nuevo` aparece en 4 de las 5 sesiones, por lo que su soporte es 0,80.
+
+Por tanto:
+
+$$
+\operatorname{lift}
+=
+\frac{1}{4/5}
+=
+\frac{1}{0.80}
+=
+1.25
+$$
+
+> **Interpretación**
+>
+> El lift de la regla es 1,25. Esto significa que las sesiones que presentan simultáneamente inicio fallido y cambio de ubicación contienen un dispositivo nuevo 1,25 veces más de lo que se esperaría si el antecedente y el consecuente fueran independientes.
+
+La interpretación general del lift es:
+
+- **Lift = 1:** el antecedente y el consecuente aparecen juntos con la frecuencia esperada bajo independencia.
+- **Lift > 1:** existe una asociación positiva; el consecuente aparece con mayor frecuencia cuando está presente el antecedente.
+- **Lift < 1:** existe una asociación negativa; el consecuente aparece con menor frecuencia cuando está presente el antecedente.
+
+
+> **Precaución**
+>
+> Un lift mayor que 1 indica asociación, pero no demuestra causalidad. Además, un valor elevado puede corresponder a una regla con soporte muy bajo, sustentada por pocas transacciones.
+
+## 10.1 Comparación de reglas
+
+| Regla | Soporte | Confianza | Lift |
+|:---   |---:     |---:       |---:  |
+| A     | 0.40    | 0.80      | 1.02 |
+| B     | 0.05    | 0.60      | 3.50 |
+
+## 10.2 Preguntas de análisis
+
+1. ¿Cuál regla es más frecuente?
+2. ¿Cuál presenta mayor asociación relativa?
+3. ¿Cuál resulta más útil?
+4. ¿Puede seleccionarse una regla utilizando una única métrica?
+
+### 10.3 Respuestas
+
+1. La regla A es más frecuente.
+2. La regla B presenta mayor asociación relativa.
+3. La utilidad depende del dominio, el costo de actuar y el número de casos cubiertos.
+4. No. La selección debe considerar soporte, confianza, lift, conteo absoluto, redundancia, estabilidad y utilidad.
+
+> **Idea clave**
+>
+> El lift corrige parcialmente el problema de los consecuentes muy frecuentes. Una confianza alta puede resultar poco informativa cuando el consecuente aparece en gran parte de las transacciones. Por esta razón, el lift debe analizarse junto con el soporte y la confianza.
+
+# 11. Propiedad antimonótona y algoritmo Apriori
+
+## 11.1 Complejidad combinatoria
+
+Cuando una base contiene una gran cantidad de ítems, el número de combinaciones posibles aumenta rápidamente.
+
+Para **p** ítems, el número de pares diferentes se calcula como:
+
+$$
+\binom{p}{2}
+=
+\frac{p(p-1)}{2}
+$$
+
+Si existen 1000 ítems:
+
+$$
+\binom{1000}{2}
+=
+499\,500
+$$
+
+Esto significa que deben evaluarse 499 500 pares posibles. Al considerar combinaciones de tres, cuatro o más ítems, el número de candidatos aumenta de manera combinatoria.
+
+> **Interpretación**
+>
+> Evaluar todas las combinaciones posibles puede resultar computacionalmente costoso. El algoritmo Apriori reduce este espacio de búsqueda eliminando anticipadamente los candidatos que no pueden ser frecuentes.
+
+## 11.2 Propiedad antimonótona del soporte
+
+La propiedad antimonótona establece que el soporte de un conjunto no puede aumentar cuando se agregan nuevos ítems.
+
+Considere un itemset X y un conjunto adicional de ítems Z:
+
+$$
+\operatorname{support}(X \cup Z)
+\leq
+\operatorname{support}(X)
+$$
+
+Esto ocurre porque toda transacción que contiene X / Z necesariamente contiene también X. Sin embargo, no todas las transacciones que contienen X incluyen los elementos adicionales de Z.
+
+> **Principio clave**
+>
+> Si un itemset no alcanza el soporte mínimo, ningún superconjunto que lo contenga puede alcanzar dicho soporte.
+
+Por ejemplo, considere el itemset:
+
+**{MFA fallido, restablecimiento de clave}**: **X**
+
+Si este conjunto no alcanza el soporte mínimo, pueden descartarse los siguientes candidatos:
+
+- **{inicio fallido, MFA fallido, restablecimiento de clave}**
+- **{dispositivo nuevo, MFA fallido, restablecimiento de clave}**
+- **{inicio fallido, dispositivo nuevo, MFA fallido, restablecimiento de clave}**
+
+Todos estos candidatos contienen el itemset original. Por lo tanto, su soporte será igual o menor.
+
+## 11.3 Utilidad de la propiedad antimonótona
+
+La propiedad antimonótona permite:
+
+- reducir el número de combinaciones evaluadas;
+- descartar candidatos antes de calcular completamente su soporte;
+- disminuir el tiempo de ejecución;
+- reducir el uso de memoria;
+- hacer viable la búsqueda de itemsets frecuentes en bases con muchos ítems.
+
+> **Precaución**
+>
+> La propiedad no funciona en sentido inverso. Que un itemset sea frecuente no garantiza que todos sus superconjuntos también sean frecuentes.
+
+## 11.4 Etapas del algoritmo Apriori
+
+El algoritmo Apriori utiliza la propiedad antimonótona durante la generación de candidatos.
+
+1. Identificar los ítems individuales frecuentes.
+2. Generar candidatos de tamaño mayor.
+3. Eliminar los candidatos que contienen algún subconjunto no frecuente.
+4. Calcular el soporte de los candidatos restantes.
+5. Repetir el procedimiento hasta que no puedan generarse nuevos itemsets frecuentes.
+6. Generar reglas a partir de los itemsets frecuentes.
+7. Filtrar las reglas mediante confianza, lift, redundancia y criterios del dominio.
+
+> **Idea clave**
+>
+> Apriori evita evaluar combinaciones que, por la propiedad antimonótona, no pueden alcanzar el soporte mínimo.
+
+## 11.5 Efecto del soporte mínimo
+
+Una reducción excesiva del soporte mínimo produce:
+
+- mayor número de itemsets frecuentes;
+- mayor número de candidatos;
+- aumento del tiempo de ejecución;
+- mayor consumo de memoria;
+- incremento de reglas raras o redundantes;
+- mayor dificultad de interpretación.
+
+En cambio, un soporte mínimo demasiado alto puede eliminar asociaciones poco frecuentes pero potencialmente relevantes.
+
+> **Conclusión**
+>
+> El soporte mínimo controla el equilibrio entre costo computacional y capacidad para detectar patrones poco frecuentes.
+
+# 12. Aplicación de Apriori en R
+
+## 12.1 Construcción de transacciones
+
+```{r transacciones-ciber}
+sesiones_ciber <- list(
+  S01=c("inicio_fallido", "dispositivo_nuevo", "cambio_ubicacion", "mfa_fallido"),
+  S02=c("inicio_fallido", "dispositivo_nuevo", "cambio_ubicacion"),
+  S03=c("inicio_fallido", "dispositivo_nuevo", "restablecimiento_clave"),
+  S04=c("inicio_fallido", "dispositivo_nuevo", "cambio_ubicacion", "restablecimiento_clave"),
+  S05=c("inicio_fallido", "cambio_ubicacion", "mfa_fallido"),
+  S06=c("dispositivo_nuevo", "cambio_ubicacion", "mfa_fallido"),
+  S07=c("archivo_malicioso", "proceso_inusual", "conexion_externa"),
+  S08=c("archivo_malicioso", "proceso_inusual", "conexion_externa"),
+  S09=c("archivo_malicioso", "proceso_inusual"),
+  S10=c("proceso_inusual", "conexion_externa", "privilegios_elevados"),
+  S11=c("archivo_malicioso", "conexion_externa"),
+  S12=c("inicio_fallido", "restablecimiento_clave"),
+  S13=c("dispositivo_nuevo", "cambio_ubicacion"),
+  S14=c("inicio_fallido", "dispositivo_nuevo", "mfa_fallido"),
+  S15=c("archivo_malicioso", "proceso_inusual", "privilegios_elevados"),
+  S16=c("inicio_fallido", "dispositivo_nuevo", "cambio_ubicacion", "mfa_fallido"),
+  S17=c("archivo_malicioso", "proceso_inusual", "conexion_externa"),
+  S18=c("inicio_fallido", "cambio_ubicacion"),
+  S19=c("proceso_inusual", "conexion_externa"),
+  S20=c("inicio_fallido", "dispositivo_nuevo", "restablecimiento_clave")
+)
+
+transacciones_ciber <- as(
+  sesiones_ciber,
+  "transactions"
+)
+
+summary(transacciones_ciber)
+```
+
+## 12.2 Frecuencia de eventos
+
+```{r frecuencias-ciber}
+itemFrequencyPlot(
+  transacciones_ciber,
+  topN=10,
+  type="relative",
+  main="Frecuencia relativa de eventos de ciberseguridad"
+)
+```
+
+## 12.3 Parámetros del algoritmo
+
+Se utilizarán los siguientes valores:
+
+- soporte mínimo: 0.15;
+- confianza mínima: 0.60;
+- longitud mínima: 2;
+- longitud máxima: 3.
+
+Con 20 sesiones, un soporte de 0.15 exige que la regla aparezca en al menos 3 sesiones. Una confianza de 0.60 exige que el consecuente aparezca en al menos 60% de las sesiones que contienen el antecedente.
+
+## 12.4 Generación de reglas
+
+```{r apriori-ciber}
+reglas_ciber <- apriori(
+  transacciones_ciber,
+  parameter=list(
+    supp=0.15,
+    conf=0.60,
+    minlen=2,
+    maxlen=3
+  )
+)
+
+summary(reglas_ciber)
+```
+
+## 12.5 Ordenamiento por lift
+
+```{r ordenar-ciber}
+reglas_ciber_lift <- sort(
+  reglas_ciber,
+  by="lift",
+  decreasing=TRUE
+)
+
+inspect(
+  head(reglas_ciber_lift, 20)
+)
+```
+
+## 12.6 Eliminación de redundancia
+
+```{r redundancia-ciber}
+reglas_ciber_filtradas <- reglas_ciber_lift[
+  !is.redundant(reglas_ciber_lift)
+]
+
+inspect(
+  head(reglas_ciber_filtradas, 20)
+)
+```
+
+## 12.7 Criterios de interpretación
+
+Una regla no debe seleccionarse únicamente por presentar el mayor lift. Deben considerarse:
+
+1. soporte y conteo absoluto;
+2. confianza;
+3. lift;
+4. redundancia;
+5. estabilidad temporal;
+6. costo de falsos positivos;
+7. relevancia operativa;
+8. validación por especialistas.
+
+Una regla técnicamente correcta puede ser operativamente poco útil si es trivial, rara, redundante o producida por el propio sistema de monitoreo.
+
+## 13.1 Ejercicio 1: asociación entre hallazgos clínicos
+
+Considere los siguientes episodios:
+
+| Episodio | Hallazgos                    |
+|----------|------------------------------|
+| E1       | fiebre, tos, fatiga          |
+| E2       | fiebre, cefalea              |
+| E3       | tos, fatiga, disnea          |
+| E4       | fiebre, tos, cefalea         |
+| E5       | fiebre, tos, fatiga, cefalea |
+
+Se desea evaluar la regla:
+
+**{fiebre, fatiga} → {tos}**
+
+### Preguntas previas
+
+1. ¿En qué episodios aparece el antecedente completo?
+2. ¿En cuántos de esos episodios también aparece tos?
+3. ¿En cuántos episodios aparece tos, independientemente del antecedente?
+4. ¿Qué resultado se esperaría si antecedente y consecuente fueran independientes?
+
+### Desarrollo
+
+El antecedente `{fiebre, fatiga}` aparece en E1 y E5. En ambos episodios también aparece `tos`.
+
+La combinación completa aparece en 2 de los 5 episodios:
+
+$$
+\operatorname{support}
+=
+\frac{2}{5}
+=
+0.40
+$$
+
+La confianza corresponde a la proporción de episodios con el antecedente que también contienen el consecuente:
+
+$$
+\operatorname{confidence}
+=
+\frac{2}{2}
+=
+1
+$$
+
+El consecuente `tos` aparece en 4 de los 5 episodios, por lo que su soporte es 0,80.
+
+$$
+\operatorname{lift}
+=
+\frac{1}{0.80}
+=
+1.25
+$$
+
+### Interpretación
+
+- El soporte de 0,40 indica que el 40 % de los episodios contiene simultáneamente fiebre, fatiga y tos.
+- La confianza de 1 indica que todos los episodios con fiebre y fatiga también presentan tos.
+- El lift de 1,25 indica que la tos aparece 1,25 veces más de lo esperado cuando están presentes fiebre y fatiga.
+
+> **Conclusión admisible**
+>
+> En esta muestra se observa una asociación positiva entre la combinación de fiebre y fatiga y la presencia de tos.
+
+> **Conclusión no admisible**
+>
+> No puede afirmarse que fiebre y fatiga causen tos ni que esta regla permita establecer un diagnóstico clínico.
+
+> **Limitación**
+>
+> La muestra contiene solamente cinco episodios. Los resultados deben considerarse ilustrativos y no generalizables.
+
+## 13.2 Ejercicio 2: asociación entre actividades educativas
+
+Considere las siguientes semanas de actividad:
+
+| Semana | Actividades              |
+|:-------|:-------------------------|
+| W1     | video, quiz, foro        |
+| W2     | video, tarea             |
+| W3     | quiz, foro, lectura      |
+| W4     | video, quiz, tarea       |
+| W5     | video, quiz, foro, tarea |
+
+Se desea evaluar la regla:
+
+**{video, tarea} → {quiz}**
+
+### Preguntas previas
+
+1. ¿En qué semanas aparece el antecedente completo?
+2. ¿En cuántas de esas semanas también aparece quiz?
+3. ¿Cuál es la frecuencia general del quiz?
+4. ¿La confianza será mayor o menor que la frecuencia basal del consecuente?
+
+### Desarrollo
+
+El antecedente `{video, tarea}` aparece en W2, W4 y W5. El consecuente `quiz` aparece en W4 y W5.
+
+La combinación completa aparece en 2 de las 5 semanas:
+
+$$
+\operatorname{support}
+=
+\frac{2}{5}
+=
+0.40
+$$
+
+La confianza corresponde a la proporción de semanas con video y tarea que también contienen quiz:
+
+$$
+\operatorname{confidence}
+=
+\frac{2}{3}
+\approx
+0.67
+$$
+
+El consecuente `quiz` aparece en 4 de las 5 semanas, por lo que su soporte es 0,80.
+
+$$
+\operatorname{lift}
+=
+\frac{0.67}{0.80}
+\approx
+0.83
+$$
+
+### Interpretación
+
+- El soporte de 0,40 indica que el 40 % de las semanas contiene video, tarea y quiz.
+- La confianza de aproximadamente 0,67 indica que el quiz aparece en cerca del 67 % de las semanas donde también se realizan video y tarea.
+- El lift de 0,83 es menor que 1, por lo que el quiz aparece con menor frecuencia de la esperada cuando están presentes video y tarea.
+
+> **Conclusión admisible**
+>
+> En esta muestra no se observa una asociación positiva entre realizar video y tarea y la presencia de quiz.
+
+> **Conclusión no admisible**
+>
+> No puede afirmarse que realizar videos y tareas disminuya el aprendizaje ni que reduzca causalmente la participación en quizzes.
+
+> **Limitación**
+>
+> El análisis no considera dificultad de las actividades, calendario, motivación, carga académica ni diseño pedagógico. Además, el número de semanas es insuficiente para formular conclusiones generales.
+
+## 13.3 Comparación de los resultados
+
+| Regla                    | Soporte | Confianza | Lift | Asociación                         |
+|--------------------------|---------|-----------|------|------------------------------------|
+| {fiebre, fatiga} → {tos} | 0.40    | 1.00      | 1.25 | Positiva                           |
+| {video, tarea} → {quiz}  | 0.40    | 0.67      | 0.83 | Negativa respecto de independencia |
+
+### Preguntas de cierre
+
+1. ¿Por qué ambas reglas tienen el mismo soporte, pero diferente confianza?
+2. ¿Por qué una confianza de 0,67 no implica necesariamente una asociación positiva?
+3. ¿Qué información adicional entrega el lift?
+4. ¿Cuál de las dos reglas presenta mayor asociación?
+5. ¿Por qué ninguna de las reglas permite establecer causalidad?
+
+### Respuestas
+
+1. Ambas combinaciones completas aparecen en 2 de 5 transacciones, pero sus antecedentes tienen frecuencias diferentes.
+2. La confianza debe compararse con la frecuencia basal del consecuente.
+3. El lift indica si el consecuente aparece más o menos de lo esperado bajo independencia.
+4. La regla clínica presenta mayor asociación porque su lift es 1,25.
+5. Las reglas describen coocurrencias y no controlan causas alternativas ni variables externas.
+
+# 14. Tarea: diseño de un análisis de asociación
+
+Seleccione uno de los cinco casos propuestos y plantee un análisis de reglas de asociación. Cada caso presenta solamente el contexto general; la definición de las transacciones, los ítems y los parámetros deberá completarse de acuerdo con el problema seleccionado.
+
+## 14.1 Casos disponibles
+
+### Caso 1. Bioinformática: alteraciones moleculares
+
+Se dispone de información de muestras tumorales. Para cada muestra se conoce la presencia o ausencia de mutaciones, amplificaciones, deleciones y rutas moleculares alteradas.
+
+El análisis busca identificar alteraciones que tienden a presentarse conjuntamente.
+
+**Pregunta orientadora:**  
+¿Qué combinaciones de alteraciones moleculares aparecen con una frecuencia mayor que la esperada?
+
+### Caso 2. Mantenimiento industrial: señales previas a una falla
+
+Una planta registra información de sensores durante las horas previas a una falla. Entre las señales disponibles se encuentran temperatura elevada, vibración anormal, presión fuera de rango, ruido mecánico y alarmas de componentes.
+
+El análisis busca detectar patrones que puedan apoyar la planificación de inspecciones preventivas.
+
+**Pregunta orientadora:**  
+¿Qué señales suelen presentarse juntas antes de una falla o alarma específica?
+
+---
+
+### Caso 3. Navegación web: comportamiento dentro de un sitio
+
+Un sitio web registra las páginas y acciones realizadas durante cada sesión. Los eventos disponibles pueden incluir búsqueda, visita a una página de producto, descarga de contenido, registro, abandono o envío de formulario.
+
+El análisis busca reconocer recorridos frecuentes dentro del sitio.
+
+**Pregunta orientadora:**  
+¿Qué páginas o acciones tienden a aparecer dentro de una misma sesión?
+
+---
+
+### Caso 4. Ciberseguridad: eventos dentro de una sesión
+
+Un sistema registra eventos asociados con sesiones de acceso. Entre ellos se encuentran inicio fallido, cambio de ubicación, dispositivo nuevo, restablecimiento de clave, MFA fallido y elevación de privilegios.
+
+El análisis busca identificar combinaciones de eventos que puedan justificar una revisión adicional.
+
+**Pregunta orientadora:**  
+¿Qué eventos de seguridad aparecen juntos con mayor frecuencia?
+
+---
+
+### Caso 5. Educación: actividades realizadas durante una semana
+
+Una plataforma educativa registra las actividades realizadas por cada estudiante durante una semana. Los eventos incluyen visualización de videos, participación en foros, lectura de material, realización de quizzes y entrega de tareas.
+
+El análisis busca reconocer patrones de participación.
+
+**Pregunta orientadora:**  
+¿Qué actividades tienden a realizarse durante una misma semana?
+
+## 14.2 Ficha de trabajo
+
+Complete la siguiente información para el caso seleccionado.
+
+**Caso seleccionado:**  
+....................................................................................
+
+**Objetivo del análisis:**  
+....................................................................................  
+....................................................................................
+
+**Unidad transaccional:**  
+....................................................................................
+
+**Justificación de la unidad transaccional:**  
+....................................................................................  
+....................................................................................
+
+**Ítems considerados:**  
+
+1. ................................................................................
+2. ................................................................................
+3. ................................................................................
+4. ................................................................................
+5. ................................................................................
+6. ................................................................................
+7. ................................................................................
+8. ................................................................................
+
+**Número de transacciones:**  
+....................................................................................
+
+**Origen de los datos:**  
+....................................................................................
+
+## 14.3 Definición de parámetros
+
+Proponga valores para los parámetros de Apriori y justifique su elección.
+
+**Soporte mínimo:**  
+....................................................................................
+
+**Justificación:**  
+....................................................................................  
+....................................................................................
+
+**Confianza mínima:**  
+....................................................................................
+
+**Justificación:**  
+....................................................................................  
+....................................................................................
+
+**Longitud mínima y máxima de las reglas:**  
+....................................................................................
+
+## 14.4 Aplicación de Apriori
+
+Implemente el análisis en R siguiendo estas etapas:
+
+1. Construir el objeto de tipo `transactions`.
+2. Revisar la frecuencia de los ítems.
+3. Aplicar el algoritmo Apriori.
+4. Ordenar las reglas según lift.
+5. Eliminar reglas redundantes.
+6. Seleccionar cinco reglas para su interpretación.
+
+Puede utilizar la siguiente estructura como referencia:
+
+```{r tarea-apriori, eval=FALSE}
+reglas <- apriori(
+  transacciones,
+  parameter=list(
+    supp=___,
+    conf=___,
+    minlen=___,
+    maxlen=___
+  )
+)
+
+reglas_ordenadas <- sort(
+  reglas,
+  by="lift",
+  decreasing=TRUE
+)
+
+reglas_filtradas <- reglas_ordenadas[
+  !is.redundant(reglas_ordenadas)
+]
+
+inspect(
+  head(reglas_filtradas, 10)
+)
+```
+
+
+# 15. Síntesis
+
+K-means y DBSCAN representan definiciones diferentes de clúster. K-means organiza observaciones alrededor de centroides, mientras que DBSCAN identifica regiones densas conectadas y permite clasificar observaciones como ruido.
+
+El análisis de asociación estudia coocurrencias dentro de unidades transaccionales. Estas unidades pueden corresponder a sesiones de seguridad, episodios clínicos, semanas educativas, muestras biológicas o incidentes industriales.
+
+Soporte, confianza y lift describen propiedades diferentes de una regla. Apriori reduce el espacio de búsqueda mediante la propiedad antimonótona del soporte. La interpretación final requiere considerar frecuencia, estabilidad, redundancia, conocimiento del dominio y ausencia de evidencia causal directa.
